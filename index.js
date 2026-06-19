@@ -8,8 +8,23 @@ app.use(express.json());
 
 // ─── Utilitário: lê tokens salvos ───────────────────────────────────────────
 function getTokens() {
+  // Em produção (Render), lê da variável de ambiente ML_TOKENS
+  if (process.env.ML_TOKENS) {
+    return JSON.parse(process.env.ML_TOKENS);
+  }
+  // Em desenvolvimento local, lê do arquivo tokens.json
   if (!fs.existsSync('tokens.json')) return null;
   return JSON.parse(fs.readFileSync('tokens.json'));
+}
+
+// ─── Utilitário: salva tokens (só funciona localmente; no Render é manual) ──
+function saveTokens(tokens) {
+  if (!process.env.ML_TOKENS) {
+    fs.writeFileSync('tokens.json', JSON.stringify(tokens, null, 2));
+  } else {
+    console.log('⚠️  Token renovado em memória. Atualize a variável ML_TOKENS no Render com o valor abaixo:');
+    console.log(JSON.stringify(tokens));
+  }
 }
 
 // ─── Utilitário: renova o access_token automaticamente ──────────────────────
@@ -28,7 +43,7 @@ async function refreshAccessToken() {
     { headers: { 'content-type': 'application/x-www-form-urlencoded' } }
   );
 
-  fs.writeFileSync('tokens.json', JSON.stringify(response.data, null, 2));
+  saveTokens(response.data);
   console.log('Token renovado com sucesso.');
   return response.data.access_token;
 }
@@ -37,7 +52,6 @@ async function refreshAccessToken() {
 async function getValidToken() {
   const tokens = getTokens();
   if (!tokens) throw new Error('Faça a autenticação primeiro.');
-  // Tenta usar o token atual; se falhar, renova
   return tokens.access_token;
 }
 
@@ -51,14 +65,29 @@ app.post('/webhook', async (req, res) => {
   if (topic !== 'questions') return;
 
   try {
-    const token = await getValidToken();
+    let token = await getValidToken();
 
     // 1. Busca os dados da pergunta
     const questionId = resource.replace('/questions/', '');
-    const { data: question } = await axios.get(
-      `https://api.mercadolibre.com/questions/${questionId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+    let question;
+    try {
+      const resp = await axios.get(
+        `https://api.mercadolibre.com/questions/${questionId}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      question = resp.data;
+    } catch (err) {
+      if (err.response?.status === 401) {
+        token = await refreshAccessToken();
+        const resp = await axios.get(
+          `https://api.mercadolibre.com/questions/${questionId}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        question = resp.data;
+      } else {
+        throw err;
+      }
+    }
 
     if (question.status !== 'UNANSWERED') return;
     console.log('Pergunta:', question.text);
@@ -109,10 +138,6 @@ Responda em português, de forma curta e direta.`;
     console.log('Resposta enviada com sucesso!');
   } catch (err) {
     console.error('Erro:', err.response?.data || err.message);
-    // Se token expirou, renova e tenta de novo
-    if (err.response?.status === 401) {
-      await refreshAccessToken();
-    }
   }
 });
 
