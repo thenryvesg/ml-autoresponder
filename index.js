@@ -98,6 +98,20 @@ app.post('/webhook', async (req, res) => {
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
+    // 2.1 Monta um resumo legível das variações (cor/tamanho) com estoque de cada uma
+    let variacoesTexto = 'Este produto não possui variações cadastradas.';
+    if (item.variations && item.variations.length > 0) {
+      variacoesTexto = item.variations.map(v => {
+        const combinacao = v.attribute_combinations
+          ?.map(ac => `${ac.name}: ${ac.value_name}`)
+          .join(', ') || 'Variação sem nome';
+        const estoque = v.available_quantity > 0
+          ? `${v.available_quantity} em estoque`
+          : 'SEM ESTOQUE (esgotado)';
+        return `- ${combinacao} → ${estoque}`;
+      }).join('\n');
+    }
+
     // 3. Chama o Claude para gerar a resposta
     const prompt = `Você é um assistente de vendas do Mercado Livre. Responda a pergunta do cliente de forma simpática, clara e objetiva, com base nos dados do produto. Não invente informações que não estão nos dados.
 
@@ -105,9 +119,23 @@ Produto: ${item.title}
 Descrição: ${item.description || 'Não disponível'}
 Atributos: ${JSON.stringify(item.attributes?.slice(0, 10))}
 
+Variações disponíveis e estoque:
+${variacoesTexto}
+
 Pergunta do cliente: ${question.text}
 
-Responda em português, de forma curta e direta.`;
+Diretrizes para a resposta:
+- Tom natural e cordial, como um vendedor experiente conversando — evite linguagem robótica ou genérica
+- Direto ao ponto: responda exatamente o que foi perguntado antes de qualquer informação extra
+- Se o cliente perguntar sobre uma cor/variação específica, confirme se ela existe E se tem estoque disponível — uma variação "sem estoque" deve ser tratada como indisponível no momento, não como disponível
+- Se a variação perguntada estiver sem estoque, informe isso com transparência e sugira as opções que SÃO encontradas em estoque, se houver
+- Se fizer sentido, finalize reforçando um diferencial do produto ou incentivando a compra, sem exagerar
+- Se a informação perguntada não estiver nos dados do produto, diga isso com transparência e oriente o cliente a perguntar mais detalhes, em vez de inventar
+- Máximo de 3-4 frases
+- Não use saudações tipo "Olá" ou assinaturas — vá direto na resposta
+- Não use markdown (sem asteriscos, sem negrito) nem emojis — o campo de resposta do ML não renderiza formatação
+
+Responda em português do Brasil.`;
 
     const { data: aiResponse } = await axios.post(
       'https://api.anthropic.com/v1/messages',
