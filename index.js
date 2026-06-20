@@ -2,29 +2,35 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
 
+// Caminho do arquivo de tokens:
+// - No Render, usamos o disco persistente montado em /data (configurado no painel)
+// - Localmente, usamos a própria pasta do projeto
+const TOKENS_PATH = process.env.RENDER
+  ? path.join('/data', 'tokens.json')
+  : path.join(__dirname, 'tokens.json');
+
 // ─── Utilitário: lê tokens salvos ───────────────────────────────────────────
 function getTokens() {
-  // Em produção (Render), lê da variável de ambiente ML_TOKENS
+  if (fs.existsSync(TOKENS_PATH)) {
+    return JSON.parse(fs.readFileSync(TOKENS_PATH));
+  }
+  // Fallback: se ainda não existir no disco, tenta a variável de ambiente
+  // (útil só na primeira vez, antes do disco ser populado)
   if (process.env.ML_TOKENS) {
     return JSON.parse(process.env.ML_TOKENS);
   }
-  // Em desenvolvimento local, lê do arquivo tokens.json
-  if (!fs.existsSync('tokens.json')) return null;
-  return JSON.parse(fs.readFileSync('tokens.json'));
+  return null;
 }
 
-// ─── Utilitário: salva tokens (só funciona localmente; no Render é manual) ──
+// ─── Utilitário: salva tokens no disco persistente ──────────────────────────
 function saveTokens(tokens) {
-  if (!process.env.ML_TOKENS) {
-    fs.writeFileSync('tokens.json', JSON.stringify(tokens, null, 2));
-  } else {
-    console.log('⚠️  Token renovado em memória. Atualize a variável ML_TOKENS no Render com o valor abaixo:');
-    console.log(JSON.stringify(tokens));
-  }
+  fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+  console.log('Tokens salvos em', TOKENS_PATH);
 }
 
 // ─── Utilitário: renova o access_token automaticamente ──────────────────────
@@ -171,6 +177,17 @@ Responda em português do Brasil.`;
 
 // ─── Rota de saúde (o Render exige isso) ────────────────────────────────────
 app.get('/', (req, res) => res.send('Servidor ML AutoResponder online!'));
+
+// ─── Rota para popular/atualizar o token manualmente (protegida por senha simples) ──
+// Use apenas uma vez para inicializar o disco persistente, ou se precisar forçar uma atualização manual
+app.post('/setup-token', (req, res) => {
+  const { senha, tokens } = req.body;
+  if (senha !== process.env.SETUP_PASSWORD) {
+    return res.status(401).send('Senha incorreta.');
+  }
+  saveTokens(tokens);
+  res.send('Token salvo com sucesso no disco persistente!');
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
