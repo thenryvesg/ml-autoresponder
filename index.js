@@ -98,6 +98,23 @@ app.post('/webhook', async (req, res) => {
     if (question.status !== 'UNANSWERED') return;
     console.log('Pergunta:', question.text);
 
+    // ─── Aguarda 10 minutos antes de responder, dando chance de resposta manual ──
+    const DELAY_MINUTOS = 10;
+    console.log(`Aguardando ${DELAY_MINUTOS} minutos antes de gerar a resposta (pergunta ${questionId})...`);
+    await new Promise(resolve => setTimeout(resolve, DELAY_MINUTOS * 60 * 1000));
+
+    // ─── Checa de novo: se já foi respondida manualmente nesse meio tempo, não faz nada ──
+    token = await getValidToken();
+    const { data: questionAtualizada } = await axios.get(
+      `https://api.mercadolibre.com/questions/${questionId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (questionAtualizada.status !== 'UNANSWERED') {
+      console.log(`Pergunta ${questionId} já foi respondida manualmente. IA não vai responder.`);
+      return;
+    }
+
     // 2. Busca os dados do produto
     const { data: item } = await axios.get(
       `https://api.mercadolibre.com/items/${question.item_id}`,
