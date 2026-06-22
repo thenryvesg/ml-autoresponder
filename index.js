@@ -98,9 +98,13 @@ app.post('/webhook', async (req, res) => {
     if (question.status !== 'UNANSWERED') return;
     console.log('Pergunta:', question.text);
 
-    // ─── Aguarda 10 minutos antes de responder, dando chance de resposta manual ──
-    const DELAY_MINUTOS = 10;
-    console.log(`Aguardando ${DELAY_MINUTOS} minutos antes de gerar a resposta (pergunta ${questionId})...`);
+    // ─── Define o delay conforme horário comercial (fuso São Paulo) ─────────────
+    const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const diaSemana = agora.getDay(); // 0 = domingo, 6 = sábado
+    const hora = agora.getHours();
+    const ehHorarioComercial = diaSemana >= 1 && diaSemana <= 5 && hora >= 9 && hora < 18;
+    const DELAY_MINUTOS = ehHorarioComercial ? 35 : 10;
+    console.log(`Horário ${ehHorarioComercial ? 'comercial' : 'fora do comercial'} — aguardando ${DELAY_MINUTOS} minutos antes de responder (pergunta ${questionId})...`);
     await new Promise(resolve => setTimeout(resolve, DELAY_MINUTOS * 60 * 1000));
 
     // ─── Checa de novo: se já foi respondida manualmente nesse meio tempo, não faz nada ──
