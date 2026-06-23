@@ -199,6 +199,136 @@ async function buscarEquivalenteCompativel(tituloAnuncio, marca, modelo, ano, to
   }
 }
 
+// ─── Função principal de processamento de perguntas ─────────────────────────
+async function processarPergunta(questionId) {
+  let token = await getValidToken();
+  let question;
+  try {
+    const resp = await axios.get(`https://api.mercadolibre.com/questions/${questionId}`, { headers: { Authorization: `Bearer ${token}` } });
+    question = resp.data;
+  } catch (err) {
+    if (err.response?.status === 401) {
+      token = await refreshAccessToken();
+      const resp = await axios.get(`https://api.mercadolibre.com/questions/${questionId}`, { headers: { Authorization: `Bearer ${token}` } });
+      question = resp.data;
+    } else throw err;
+  }
+
+  if (question.status !== 'UNANSWERED') {
+    console.log(`Pergunta ${questionId} já foi respondida.`);
+    return;
+  }
+  console.log('Pergunta:', question.text);
+
+  const agora = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const diaSemana = agora.getDay();
+  const hora = agora.getHours();
+  const ehHorarioComercial = diaSemana >= 1 && diaSemana <= 5 && hora >= 9 && hora < 18;
+  const delayAtivo = process.env.DELAY_ATIVO !== 'false';
+
+  if (delayAtivo) {
+    const DELAY_MINUTOS = ehHorarioComercial ? 35 : 10;
+    console.log(`Aguardando ${DELAY_MINUTOS} minutos (pergunta ${questionId})...`);
+    await new Promise(resolve => setTimeout(resolve, DELAY_MINUTOS * 60 * 1000));
+
+    // Checa se já foi respondida manualmente durante o delay
+    token = await getValidToken();
+    const { data: questionAtualizada } = await axios.get(`https://api.mercadolibre.com/questions/${questionId}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (questionAtualizada.status !== 'UNANSWERED') {
+      console.log(`Pergunta ${questionId} já respondida manualmente.`);
+      return;
+    }
+  } else {
+    console.log(`Delay desativado — processando imediatamente (pergunta ${questionId}).`);
+  }
+
+  const { data: item } = await axios.get(`https://api.mercadolibre.com/items/${question.item_id}`, { headers: { Authorization: `Bearer ${token}` } });
+
+  let variacoesTexto = 'Este produto não possui variações cadastradas.';
+  if (item.variations?.length > 0) {
+    variacoesTexto = item.variations.map(v => {
+      const combinacao = v.attribute_combinations?.map(ac => `${ac.name}: ${ac.value_name}`).join(', ') || 'Variação sem nome';
+      const estoque = v.available_quantity > 0 ? `${v.available_quantity} em estoque` : 'SEM ESTOQUE (esgotado)';
+      return `- ${combinacao} → ${estoque}`;
+    }).join('\n');
+  }
+
+  const perguntaLower = question.text.toLowerCase();
+  const ehCompatibilidade = ['serve', 'compatível', 'compativel', 'funciona', 'encaixa', 'fit'].some(p => perguntaLower.includes(p));
+
+  let infoEquivalente = '';
+  let dadosMotoIncompletos = '';
+
+  if (ehCompatibilidade) {
+    const { data: extraido } = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      { model: 'claude-sonnet-4-6', max_tokens: 100, messages: [{ role: 'user', content: `Extraia marca, modelo e ano da moto da seguinte pergunta. Responda APENAS em JSON no formato {"marca":"","modelo":"","ano":""} sem mais nada. Se não tiver algum campo, deixe vazio.\n\nPergunta: "${question.text}"` }] },
+      { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    );
+    try {
+      const { marca, modelo, ano } = JSON.parse(extraido.content[0].text.trim());
+      console.log(`Dados extraídos — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"`);
+      if (!modelo) {
+        dadosMotoIncompletos = 'FALTANDO_MODELO';
+      } else if (!ano) {
+        dadosMotoIncompletos = 'FALTANDO_ANO';
+      } else {
+        const equivalente = await buscarEquivalenteCompativel(item.title, marca, modelo, ano, token);
+        if (equivalente?.anuncio) {
+          infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.anuncio.titulo}\nLink: ${equivalente.anuncio.link}`;
+        }
+      }
+    } catch { console.log('Não foi possível extrair dados da moto.'); }
+  }
+
+  const prompt = `Você é um assistente de vendas do Mercado Livre. Responda a pergunta do cliente de forma simpática, clara e objetiva, com base nos dados do produto. Não invente informações que não estão nos dados.
+
+Produto: ${item.title}
+Descrição: ${item.description || 'Não disponível'}
+Atributos: ${JSON.stringify(item.attributes?.slice(0, 10))}
+Variações disponíveis e estoque:\n${variacoesTexto}
+Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
+Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
+${infoEquivalente}
+
+Pergunta do cliente: ${question.text}
+
+Diretrizes:
+- Responda como um vendedor de loja física: direto, natural, sem enrolação
+- Vá direto à informação pedida na primeira frase
+- Se o cliente perguntar sobre cor/variação, confirme se existe E se tem estoque
+- NÃO use bordões repetitivos — varie a forma de se expressar
+- Se a informação não estiver nos dados, diga com transparência
+- CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_MODELO: o cliente não informou o modelo da moto. Responda APENAS pedindo o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?" — não tente confirmar nem negar compatibilidade
+- CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: o cliente informou marca e modelo mas NÃO informou o ano. Responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?" — não tente confirmar nem negar compatibilidade
+- CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja" nos dados: informe que esse produto específico não é compatível com a moto do cliente mas que temos o equivalente disponível e inclua o link do anúncio
+- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade e aplique a REGRA DE ENCAMINHAMENTO
+- NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
+- REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um especialista poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
+- Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
+
+Responda em português do Brasil.`;
+
+  const { data: aiResponse } = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    { model: 'claude-sonnet-4-6', max_tokens: 400, messages: [{ role: 'user', content: prompt }] },
+    { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+  );
+
+  const respostaSugerida = aiResponse.content[0].text;
+  console.log('Resposta sugerida (aguardando aprovação):', respostaSugerida);
+
+  adicionarPendente({
+    id: questionId,
+    pergunta: question.text,
+    produto: item.title,
+    resposta: respostaSugerida,
+    criadoEm: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+  });
+
+  console.log(`Resposta pendente salva para revisão (pergunta ${questionId}).`);
+}
+
 // ─── Webhook ─────────────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
@@ -426,6 +556,35 @@ app.post('/rejeitar', (req, res) => {
 
 // ─── Rota de saúde ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.send('Servidor ML AutoResponder online!'));
+
+// ─── Rota para forçar processamento de uma pergunta específica ───────────────
+app.post('/forcar-pergunta', (req, res) => {
+  const { senha, question_id } = req.body;
+  if (senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
+  if (!question_id) return res.status(400).send('question_id obrigatório.');
+
+  // Simula o webhook e processa sem delay
+  const fakeReq = { body: { topic: 'questions', resource: `/questions/${question_id}` } };
+  const fakeRes = { sendStatus: () => {} };
+
+  // Desativa delay temporariamente para essa chamada manual
+  const originalEnv = process.env.DELAY_ATIVO;
+  process.env.DELAY_ATIVO = 'false';
+
+  // Processa em background
+  setTimeout(async () => {
+    try {
+      await processarPergunta(question_id);
+      console.log(`Pergunta ${question_id} forçada com sucesso.`);
+    } catch (err) {
+      console.error(`Erro ao forçar pergunta ${question_id}:`, err.message);
+    } finally {
+      process.env.DELAY_ATIVO = originalEnv;
+    }
+  }, 100);
+
+  res.send(`Processando pergunta ${question_id} agora...`);
+});
 
 // ─── Setup token ─────────────────────────────────────────────────────────────
 app.post('/setup-token', (req, res) => {
