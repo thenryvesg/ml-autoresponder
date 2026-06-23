@@ -186,11 +186,17 @@ async function buscarEquivalenteCompativel(tituloAnuncio, marca, modelo, ano, to
       if (!sku || !aplicacao) continue;
       const aplicacaoLower = aplicacao.toLowerCase();
 
-      const modeloOk = modelo ? aplicacaoLower.includes(modelo.toLowerCase()) : false;
+      // Verifica modelo de forma flexível: remove espaços e hífens para comparar
+      const modeloNormalizado = modelo ? modelo.toLowerCase().replace(/[-\s]/g, '') : '';
+      const aplicacaoNormalizada = aplicacaoLower.replace(/[-\s]/g, '');
+      const modeloOk = modeloNormalizado ? aplicacaoNormalizada.includes(modeloNormalizado) : false;
       if (!modeloOk) continue;
 
       const anoOk = ano ? aplicacaoLower.includes(ano) : false;
       if (!anoOk) continue;
+
+      // Verifica câmbio se mencionado na pergunta (MT=manual, DCT=automático)
+      // Não filtra por câmbio — deixa o Claude decidir na resposta com base na aplicação completa
 
       const marcaOk = marca ? aplicacaoLower.includes(marca.toLowerCase()) : true;
       if (!marcaOk) continue;
@@ -290,6 +296,7 @@ async function processarPergunta(questionId) {
 
   let infoEquivalente = '';
   let dadosMotoIncompletos = '';
+  let cambio = '';
 
   if (ehCompatibilidade) {
     const { data: extraido } = await axios.post(
@@ -297,7 +304,7 @@ async function processarPergunta(questionId) {
       {
         model: 'claude-sonnet-4-6',
         max_tokens: 100,
-        messages: [{ role: 'user', content: `Extraia marca, modelo e ano da moto da seguinte pergunta. Responda APENAS em JSON no formato {"marca":"","modelo":"","ano":""} sem mais nada. Se não tiver algum campo, deixe vazio.\n\nPergunta: "${question.text}"` }]
+        messages: [{ role: 'user', content: `Extraia marca, modelo, ano e câmbio da moto da seguinte pergunta. Responda APENAS em JSON no formato {"marca":"","modelo":"","ano":"","cambio":""} sem mais nada. Para câmbio use "manual", "automatico" ou deixe vazio se não mencionado.\n\nPergunta: "${question.text}"` }]
       },
       { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
@@ -347,6 +354,7 @@ Atributos: ${JSON.stringify(item.attributes?.slice(0, 10))}
 Variações disponíveis e estoque:\n${variacoesTexto}
 Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
 Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
+Câmbio informado pelo cliente: ${cambio || 'não informado'}
 ${infoEquivalente}
 
 Pergunta do cliente: ${question.text}
