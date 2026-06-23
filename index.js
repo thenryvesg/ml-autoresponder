@@ -208,27 +208,35 @@ async function buscarEquivalenteCompativel(tituloAnuncio, marca, modelo, ano, to
   }
 }
 
-// ─── Extrai o modelo da moto do título do anúncio via Claude ────────────────
-async function extrairModeloDoTitulo(tituloAnuncio) {
+// ─── Extrai modelo e/ou marca do título ou descrição do anúncio via Claude ───
+async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio, extrairMarca = false) {
   try {
+    const campo = extrairMarca ? 'marca e modelo' : 'modelo';
+    const formato = extrairMarca
+      ? '{"marca":"","modelo":""}' 
+      : '{"modelo":""}';
+    const exemplo = extrairMarca
+      ? 'ex: {"marca":"Honda","modelo":"NC750X"}'
+      : 'ex: {"modelo":"NC750X"}';
+
     const { data } = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: 'claude-sonnet-4-6',
-        max_tokens: 50,
+        max_tokens: 80,
         messages: [{
           role: 'user',
-          content: `Do título do anúncio abaixo, extraia apenas o modelo da moto (ex: NC750X, Tiger 900, Versys 300). Responda APENAS com o modelo, sem marca, sem ano, sem mais nada. Se não houver modelo de moto no título, responda com "null".
+          content: `Do título e descrição do anúncio abaixo, extraia o ${campo} da moto. Responda APENAS em JSON no formato ${formato} (${exemplo}). Se não encontrar algum campo, deixe vazio.
 
-Título: "${tituloAnuncio}"`
+Título: "${tituloAnuncio}"
+Descrição: "${(descricaoAnuncio || '').slice(0, 500)}"`
         }],
       },
       { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
-    const resultado = data.content[0].text.trim();
-    return resultado === 'null' ? null : resultado;
+    return JSON.parse(data.content[0].text.trim());
   } catch {
-    return null;
+    return {};
   }
 }
 
