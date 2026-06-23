@@ -254,6 +254,8 @@ app.post('/webhook', async (req, res) => {
     const ehCompatibilidade = ['serve', 'compatível', 'compativel', 'funciona', 'encaixa', 'fit'].some(p => perguntaLower.includes(p));
 
     let infoEquivalente = '';
+    let dadosMotoIncompletos = ''; // FALTANDO_MODELO | FALTANDO_ANO | ''
+
     if (ehCompatibilidade) {
       const { data: extraido } = await axios.post(
         'https://api.anthropic.com/v1/messages',
@@ -262,7 +264,16 @@ app.post('/webhook', async (req, res) => {
       );
       try {
         const { marca, modelo, ano } = JSON.parse(extraido.content[0].text.trim());
-        if (marca && modelo && ano) {
+        console.log(`Dados extraídos — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"`);
+
+        if (!modelo) {
+          // Não tem modelo — sinaliza para pedir o modelo, não busca nada
+          dadosMotoIncompletos = 'FALTANDO_MODELO';
+        } else if (!ano) {
+          // Tem marca e modelo mas não tem ano — sinaliza para pedir o ano, não busca nada
+          dadosMotoIncompletos = 'FALTANDO_ANO';
+        } else {
+          // Tem tudo — busca o equivalente na Start Racing
           const equivalente = await buscarEquivalenteCompativel(item.title, marca, modelo, ano, token);
           if (equivalente?.anuncio) {
             infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.anuncio.titulo}\nLink: ${equivalente.anuncio.link}`;
@@ -278,6 +289,7 @@ Descrição: ${item.description || 'Não disponível'}
 Atributos: ${JSON.stringify(item.attributes?.slice(0, 10))}
 Variações disponíveis e estoque:\n${variacoesTexto}
 Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
+Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
 ${infoEquivalente}
 
 Pergunta do cliente: ${question.text}
@@ -288,10 +300,10 @@ Diretrizes:
 - Se o cliente perguntar sobre cor/variação, confirme se existe E se tem estoque
 - NÃO use bordões repetitivos — varie a forma de se expressar
 - Se a informação não estiver nos dados, diga com transparência
-- CASO ESPECIAL — compatibilidade incompleta (só marca/ano, sem modelo): peça o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?"
-- CASO ESPECIAL — ano não informado: peça o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?"
-- CASO ESPECIAL — incompatível MAS existe equivalente nos dados acima: informe a incompatibilidade e sugira o equivalente com o link do anúncio
-- CASO ESPECIAL — incompatível SEM equivalente: informe a incompatibilidade e aplique a REGRA DE ENCAMINHAMENTO
+- CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_MODELO: o cliente não informou o modelo da moto. Responda APENAS pedindo o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?" — não tente confirmar nem negar compatibilidade
+- CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: o cliente informou marca e modelo mas NÃO informou o ano. Responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?" — não tente confirmar nem negar compatibilidade
+- CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja" nos dados: informe que esse produto específico não é compatível com a moto do cliente mas que temos o equivalente disponível e inclua o link do anúncio
+- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
 - REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um especialista poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
 - Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
