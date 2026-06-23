@@ -208,6 +208,30 @@ async function buscarEquivalenteCompativel(tituloAnuncio, marca, modelo, ano, to
   }
 }
 
+// ─── Extrai o modelo da moto do título do anúncio via Claude ────────────────
+async function extrairModeloDoTitulo(tituloAnuncio) {
+  try {
+    const { data } = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 50,
+        messages: [{
+          role: 'user',
+          content: `Do título do anúncio abaixo, extraia apenas o modelo da moto (ex: NC750X, Tiger 900, Versys 300). Responda APENAS com o modelo, sem marca, sem ano, sem mais nada. Se não houver modelo de moto no título, responda com "null".
+
+Título: "${tituloAnuncio}"`
+        }],
+      },
+      { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    );
+    const resultado = data.content[0].text.trim();
+    return resultado === 'null' ? null : resultado;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Função principal de processamento de perguntas ─────────────────────────
 async function processarPergunta(questionId) {
   let token = await getValidToken();
