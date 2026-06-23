@@ -174,23 +174,32 @@ async function buscarAnuncioPorSku(sku, token) {
 
 async function buscarEquivalenteCompativel(tituloAnuncio, marca, modelo, ano, token) {
   try {
-    console.log(`Buscando equivalente para ${marca} ${modelo} ${ano}...`);
+    console.log(`Buscando equivalente para marca: "${marca}", modelo: "${modelo}", ano: "${ano}"...`);
     const slugCategoria = await identificarCategoria(tituloAnuncio);
     console.log('Categoria identificada:', slugCategoria);
     const produtos = await buscarProdutosCategoria(slugCategoria);
     console.log(`${produtos.length} produtos encontrados na categoria`);
+
     for (const produto of produtos.slice(0, 30)) {
       const { sku, aplicacao } = await lerProduto(produto.url);
       if (!sku || !aplicacao) continue;
       const aplicacaoLower = aplicacao.toLowerCase();
-      const marcaOk = aplicacaoLower.includes(marca.toLowerCase());
-      const modeloOk = aplicacaoLower.includes(modelo.toLowerCase());
-      const anoOk = !ano || aplicacaoLower.includes(ano);
-      if (marcaOk && modeloOk && anoOk) {
-        console.log(`Compatível: ${produto.nome} (${sku})`);
-        const anuncio = await buscarAnuncioPorSku(sku, token);
-        if (anuncio) return { nome: produto.nome, sku, anuncio };
-      }
+
+      // Verifica modelo (obrigatório) — não depende da marca
+      const modeloOk = modelo ? aplicacaoLower.includes(modelo.toLowerCase()) : false;
+      if (!modeloOk) continue;
+
+      // Verifica ano (obrigatório)
+      const anoOk = ano ? aplicacaoLower.includes(ano) : false;
+      if (!anoOk) continue;
+
+      // Marca é opcional — se informada, verifica; se não, ignora
+      const marcaOk = marca ? aplicacaoLower.includes(marca.toLowerCase()) : true;
+      if (!marcaOk) continue;
+
+      console.log(`Compatível: ${produto.nome} (${sku})`);
+      const anuncio = await buscarAnuncioPorSku(sku, token);
+      if (anuncio) return { nome: produto.nome, sku, anuncio };
     }
     return null;
   } catch (err) {
