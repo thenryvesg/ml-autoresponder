@@ -234,7 +234,8 @@ Descrição: "${(descricaoAnuncio || '').slice(0, 500)}"`
       },
       { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
-    return JSON.parse(data.content[0].text.trim());
+    const texto = data.content[0].text.trim().replace(/```json|```/g, '').trim();
+    return JSON.parse(texto);
   } catch {
     return {};
   }
