@@ -75,31 +75,31 @@ async function getValidToken() {
 }
 
 const CATEGORIAS_START_RACING = [
-  { slug: 'protecao-de-motor-off-road', nome: 'Proteção de Motor (Off Road)' },
-  { slug: 'protecao-de-motor-e-carter-street', nome: 'Proteção de Motor e Carter (Street)' },
-  { slug: 'protecao-lateral-e-motor-', nome: 'Proteção Lateral e Motor' },
-  { slug: 'protecao-de-mao', nome: 'Proteção de Mão' },
-  { slug: 'protecao-de-radiador-envolvente', nome: 'Proteção de Radiador Envolvente' },
-  { slug: 'protecao-de-radiador-mx', nome: 'Proteção de Radiador MX' },
-  { slug: 'protecao-de-radiador-xc', nome: 'Proteção de Radiador XC' },
-  { slug: 'protecao-de-radiador-frontal', nome: 'Proteção de Radiador Frontal' },
-  { slug: 'grades-frontais-de-radiador', nome: 'Grade Frontal de Radiador' },
-  { slug: 'protecao-de-farol', nome: 'Proteção de Farol' },
-  { slug: 'protecao-de-disco-de-freio', nome: 'Proteção de Disco de Freio' },
-  { slug: 'protecao-de-pinhao', nome: 'Proteção de Pinhão' },
-  { slug: 'protecao-de-cano-de-escape', nome: 'Proteção de Cano de Escape' },
-  { slug: 'guias-de-corrente', nome: 'Guia de Corrente' },
-  { slug: 'ampliacao-da-base-do-cavalete-lateral', nome: 'Ampliação da Base do Cavalete Lateral' },
-  { slug: 'cavalete-central', nome: 'Cavalete Central' },
-  { slug: 'bases-para-fixacao-de-bau-traseiro', nome: 'Base para Fixação de Baú Traseiro' },
-  { slug: 'suporte-para-bau-lateral', nome: 'Suporte para Baú Lateral' },
-  { slug: 'afastador-de-alforge', nome: 'Afastador de Alforge' },
-  { slug: 'suporte-para-gps', nome: 'Suporte para GPS' },
-  { slug: 'suporte-ajustavel-da-bolha-', nome: 'Suporte Ajustável da Bolha' },
-  { slug: 'suporte-para-farol-auxiliar', nome: 'Suporte para Farol Auxiliar' },
-  { slug: 'pedaleiras', nome: 'Pedaleiras' },
-  { slug: 'protecoes-variadas', nome: 'Proteções Variadas' },
-  { slug: 'sissibar', nome: 'Sissibar' },
+  { slug: 'protecao-de-motor-off-road/1', nome: 'Proteção de Motor (Off Road)' },
+  { slug: 'protecao-de-motor-e-carter-street/14', nome: 'Proteção de Motor e Carter (Street)' },
+  { slug: 'protecao-lateral-e-motor-/11', nome: 'Proteção Lateral e Motor' },
+  { slug: 'protecao-de-mao/12', nome: 'Proteção de Mão' },
+  { slug: 'protecao-de-radiador-envolvente/6', nome: 'Proteção de Radiador Envolvente' },
+  { slug: 'protecao-de-radiador-mx/7', nome: 'Proteção de Radiador MX' },
+  { slug: 'protecao-de-radiador-xc/8', nome: 'Proteção de Radiador XC' },
+  { slug: 'protecao-de-radiador-frontal/9', nome: 'Proteção de Radiador Frontal' },
+  { slug: 'grades-frontais-de-radiador/10', nome: 'Grade Frontal de Radiador' },
+  { slug: 'protecao-de-farol/5', nome: 'Proteção de Farol' },
+  { slug: 'protecao-de-disco-de-freio/22', nome: 'Proteção de Disco de Freio' },
+  { slug: 'protecao-de-pinhao/23', nome: 'Proteção de Pinhão' },
+  { slug: 'protecao-de-cano-de-escape/24', nome: 'Proteção de Cano de Escape' },
+  { slug: 'guias-de-corrente/25', nome: 'Guia de Corrente' },
+  { slug: 'ampliacao-da-base-do-cavalete-lateral/13', nome: 'Ampliação da Base do Cavalete Lateral' },
+  { slug: 'cavalete-central/26', nome: 'Cavalete Central' },
+  { slug: 'bases-para-fixacao-de-bau-traseiro/16', nome: 'Base para Fixação de Baú Traseiro' },
+  { slug: 'suporte-para-bau-lateral/35', nome: 'Suporte para Baú Lateral' },
+  { slug: 'afastador-de-alforge/36', nome: 'Afastador de Alforge' },
+  { slug: 'suporte-para-gps/37', nome: 'Suporte para GPS' },
+  { slug: 'suporte-ajustavel-da-bolha-/38', nome: 'Suporte Ajustável da Bolha' },
+  { slug: 'suporte-para-farol-auxiliar/39', nome: 'Suporte para Farol Auxiliar' },
+  { slug: 'pedaleiras/40', nome: 'Pedaleiras' },
+  { slug: 'protecoes-variadas/41', nome: 'Proteções Variadas' },
+  { slug: 'sissibar/42', nome: 'Sissibar' },
 ];
 
 async function identificarCategoria(tituloAnuncio) {
@@ -118,6 +118,7 @@ async function identificarCategoria(tituloAnuncio) {
 
 async function buscarProdutosCategoria(slugCategoria) {
   const url = `https://www.startracing.com.br/produtos/${slugCategoria}`;
+  console.log('Buscando categoria:', url);
   const { data: html } = await axios.get(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
     timeout: 10000,
@@ -359,7 +360,7 @@ Diretrizes:
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_MODELO: responda APENAS pedindo o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?"
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?"
 - CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja": informe que esse produto não é compatível mas temos o equivalente disponível e inclua o link do anúncio
-- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade e aplique a REGRA DE ENCAMINHAMENTO
+- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO. NUNCA mencione fabricante, manual, especificações técnicas ou qualquer fonte externa
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
 - REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um especialista poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
 - Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
