@@ -228,9 +228,15 @@ app.post('/webhook', async (req, res) => {
     const diaSemana = agora.getDay();
     const hora = agora.getHours();
     const ehHorarioComercial = diaSemana >= 1 && diaSemana <= 5 && hora >= 9 && hora < 18;
-    const DELAY_MINUTOS = ehHorarioComercial ? 35 : 10;
-    console.log(`Horário ${ehHorarioComercial ? 'comercial' : 'fora do comercial'} — aguardando ${DELAY_MINUTOS} minutos (pergunta ${questionId})...`);
-    await new Promise(resolve => setTimeout(resolve, DELAY_MINUTOS * 60 * 1000));
+    const delayAtivo = process.env.DELAY_ATIVO !== 'false';
+
+    if (delayAtivo) {
+      const DELAY_MINUTOS = ehHorarioComercial ? 35 : 10;
+      console.log(`Horário ${ehHorarioComercial ? 'comercial' : 'fora do comercial'} — aguardando ${DELAY_MINUTOS} minutos (pergunta ${questionId})...`);
+      await new Promise(resolve => setTimeout(resolve, DELAY_MINUTOS * 60 * 1000));
+    } else {
+      console.log(`Delay desativado (DELAY_ATIVO=false) — processando imediatamente (pergunta ${questionId}).`);
+    }
 
     token = await getValidToken();
     const { data: questionAtualizada } = await axios.get(`https://api.mercadolibre.com/questions/${questionId}`, { headers: { Authorization: `Bearer ${token}` } });
