@@ -166,8 +166,14 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
         const tituloLower = item.title.toLowerCase();
         const tituloNorm = tituloLower.replace(/\s/g, '');
 
-        // Filtra pelo modelo
-        const modeloOk = tituloNorm.includes(modeloNorm) || tituloLower.includes(modelo.toLowerCase());
+        // Filtra pelo modelo — compara com e sem espaços, hífens e variações
+        const modeloVariacoes = [
+          modeloNorm,                                    // ex: nc750x
+          modelo.toLowerCase(),                          // ex: nc 750x
+          modelo.toLowerCase().replace(/-/g, ' '),       // ex: nc 750 x
+          modelo.toLowerCase().replace(/\s+/g, ''),      // ex: nc750x
+        ];
+        const modeloOk = modeloVariacoes.some(v => tituloNorm.includes(v.replace(/\s/g, '')) || tituloLower.includes(v));
         if (!modeloOk) continue;
 
         // Filtra pelo tipo de produto — pelo menos 2 palavras significativas devem aparecer no título
