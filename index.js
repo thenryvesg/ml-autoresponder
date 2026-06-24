@@ -3,7 +3,6 @@ const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const cheerio = require('cheerio');
 
 const app = express();
 app.use(express.json());
@@ -18,6 +17,7 @@ const PENDENTES_PATH = process.env.RENDER
   : path.join(__dirname, 'pendentes.json');
 
 const USER_ID = '299804329';
+const SITE_ID = 'MLB';
 
 function getTokens() {
   if (fs.existsSync(TOKENS_PATH)) return JSON.parse(fs.readFileSync(TOKENS_PATH));
@@ -74,144 +74,6 @@ async function getValidToken() {
   return tokens.access_token;
 }
 
-const CATEGORIAS_START_RACING = [
-  { slug: 'protecao-de-motor-off-road/1', nome: 'Proteção de Motor (Off Road)' },
-  { slug: 'protecao-de-motor-e-carter-street/14', nome: 'Proteção de Motor e Carter (Street)' },
-  { slug: 'protecao-lateral-e-motor-/11', nome: 'Proteção Lateral e Motor' },
-  { slug: 'protecao-de-mao/12', nome: 'Proteção de Mão' },
-  { slug: 'protecao-de-radiador-envolvente/6', nome: 'Proteção de Radiador Envolvente' },
-  { slug: 'protecao-de-radiador-mx/7', nome: 'Proteção de Radiador MX' },
-  { slug: 'protecao-de-radiador-xc/8', nome: 'Proteção de Radiador XC' },
-  { slug: 'protecao-de-radiador-frontal/9', nome: 'Proteção de Radiador Frontal' },
-  { slug: 'grades-frontais-de-radiador/10', nome: 'Grade Frontal de Radiador' },
-  { slug: 'protecao-de-farol/5', nome: 'Proteção de Farol' },
-  { slug: 'protecao-de-disco-de-freio/22', nome: 'Proteção de Disco de Freio' },
-  { slug: 'protecao-de-pinhao/23', nome: 'Proteção de Pinhão' },
-  { slug: 'protecao-de-cano-de-escape/24', nome: 'Proteção de Cano de Escape' },
-  { slug: 'guias-de-corrente/25', nome: 'Guia de Corrente' },
-  { slug: 'ampliacao-da-base-do-cavalete-lateral/13', nome: 'Ampliação da Base do Cavalete Lateral' },
-  { slug: 'cavalete-central/26', nome: 'Cavalete Central' },
-  { slug: 'bases-para-fixacao-de-bau-traseiro/16', nome: 'Base para Fixação de Baú Traseiro' },
-  { slug: 'suporte-para-bau-lateral/35', nome: 'Suporte para Baú Lateral' },
-  { slug: 'afastador-de-alforge/36', nome: 'Afastador de Alforge' },
-  { slug: 'suporte-para-gps/37', nome: 'Suporte para GPS' },
-  { slug: 'suporte-ajustavel-da-bolha-/38', nome: 'Suporte Ajustável da Bolha' },
-  { slug: 'suporte-para-farol-auxiliar/39', nome: 'Suporte para Farol Auxiliar' },
-  { slug: 'pedaleiras/40', nome: 'Pedaleiras' },
-  { slug: 'protecoes-variadas/41', nome: 'Proteções Variadas' },
-  { slug: 'sissibar/42', nome: 'Sissibar' },
-];
-
-async function identificarCategoria(tituloAnuncio) {
-  const listaCategorias = CATEGORIAS_START_RACING.map(c => `- ${c.nome} (slug: ${c.slug})`).join('\n');
-  const { data } = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    {
-      model: 'claude-sonnet-4-6',
-      max_tokens: 100,
-      messages: [{ role: 'user', content: `Dado o título do anúncio: "${tituloAnuncio}"\n\nIdentifique qual categoria abaixo melhor corresponde ao produto. Responda APENAS com o slug da categoria, sem mais nada.\n\n${listaCategorias}` }],
-    },
-    { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
-  );
-  return data.content[0].text.trim();
-}
-
-async function buscarProdutosCategoria(slugCategoria) {
-  const url = `https://www.startracing.com.br/produtos/${slugCategoria}`;
-  console.log('Buscando categoria:', url);
-  const { data: html } = await axios.get(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    timeout: 10000,
-  });
-  const $ = cheerio.load(html);
-  const produtos = [];
-  $('a[href*="/produtos/"]').each((_, el) => {
-    const href = $(el).attr('href');
-    const nome = $(el).attr('title') || $(el).text().trim();
-    if (href && /\/produtos\/.+\/.+\/\d+$/.test(href) && nome) {
-      const url = href.startsWith('http') ? href : `https://www.startracing.com.br${href}`;
-      produtos.push({ nome, url });
-    }
-  });
-  return produtos.filter((p, i, arr) => arr.findIndex(x => x.url === p.url) === i);
-}
-
-async function lerProduto(urlProduto) {
-  try {
-    const { data: html } = await axios.get(urlProduto, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      timeout: 8000,
-    });
-    const $ = cheerio.load(html);
-    const texto = $('body').text();
-    const skuMatch = texto.match(/C[oó]digo[:\s]+([A-Z0-9]+)/i);
-    const sku = skuMatch ? skuMatch[1].trim() : null;
-    const aplicacaoMatch = texto.match(/Aplica[cç][aã]o do produto([\s\S]*?)(?:Seja qual for|©|$)/i);
-    const aplicacao = aplicacaoMatch ? aplicacaoMatch[1].trim() : '';
-    return { sku, aplicacao };
-  } catch {
-    return { sku: null, aplicacao: '' };
-  }
-}
-
-async function buscarAnuncioPorSku(sku, token) {
-  try {
-    for (const param of [`seller_sku=${sku}`, `sku=${sku}`]) {
-      const resp = await axios.get(
-        `https://api.mercadolibre.com/users/${USER_ID}/items/search?${param}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (resp.data.results?.length > 0) {
-        const { data: item } = await axios.get(
-          `https://api.mercadolibre.com/items/${resp.data.results[0]}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-        return { titulo: item.title, link: item.permalink };
-      }
-    }
-    return null;
-  } catch { return null; }
-}
-
-async function buscarEquivalenteCompativel(tituloAnuncio, marca, modelo, ano, token) {
-  try {
-    console.log(`Buscando equivalente — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"...`);
-    const slugCategoria = await identificarCategoria(tituloAnuncio);
-    console.log('Categoria identificada:', slugCategoria);
-    const produtos = await buscarProdutosCategoria(slugCategoria);
-    console.log(`${produtos.length} produtos encontrados na categoria`);
-
-    for (const produto of produtos.slice(0, 30)) {
-      const { sku, aplicacao } = await lerProduto(produto.url);
-      if (!sku || !aplicacao) continue;
-      const aplicacaoLower = aplicacao.toLowerCase();
-
-      // Verifica modelo de forma flexível: remove espaços e hífens para comparar
-      const modeloNormalizado = modelo ? modelo.toLowerCase().replace(/[-\s]/g, '') : '';
-      const aplicacaoNormalizada = aplicacaoLower.replace(/[-\s]/g, '');
-      const modeloOk = modeloNormalizado ? aplicacaoNormalizada.includes(modeloNormalizado) : false;
-      if (!modeloOk) continue;
-
-      const anoOk = ano ? aplicacaoLower.includes(ano) : false;
-      if (!anoOk) continue;
-
-      // Verifica câmbio se mencionado na pergunta (MT=manual, DCT=automático)
-      // Não filtra por câmbio — deixa o Claude decidir na resposta com base na aplicação completa
-
-      const marcaOk = marca ? aplicacaoLower.includes(marca.toLowerCase()) : true;
-      if (!marcaOk) continue;
-
-      console.log(`Compatível: ${produto.nome} (${sku})`);
-      const anuncio = await buscarAnuncioPorSku(sku, token);
-      if (anuncio) return { nome: produto.nome, sku, anuncio };
-    }
-    return null;
-  } catch (err) {
-    console.error('Erro ao buscar equivalente:', err.message);
-    return null;
-  }
-}
-
 // ─── Extrai marca e/ou modelo do título e descrição do anúncio via Claude ────
 async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio) {
   try {
@@ -239,7 +101,114 @@ Descrição: "${(descricaoAnuncio || '').slice(0, 500)}"`
   }
 }
 
-// ─── Função principal de processamento de perguntas ──────────────────────────
+// ─── Extrai tipo de produto do título do anúncio ─────────────────────────────
+async function extrairTipoProduto(tituloAnuncio) {
+  try {
+    const { data } = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 50,
+        messages: [{
+          role: 'user',
+          content: `Do título do anúncio abaixo, extraia apenas o tipo/nome do produto (ex: "protetor de motor", "suporte GPS", "protetor de mão"). Responda APENAS com o tipo do produto, sem marca, sem modelo, sem ano.
+
+Título: "${tituloAnuncio}"`
+        }],
+      },
+      { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    );
+    return data.content[0].text.trim();
+  } catch {
+    return '';
+  }
+}
+
+// ─── Busca anúncio equivalente nos anúncios do vendedor no ML ────────────────
+async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio, token) {
+  try {
+    // Extrai o tipo do produto para montar a query
+    const tipoProduto = await extrairTipoProduto(tituloAnuncio);
+    console.log('Tipo de produto identificado:', tipoProduto);
+
+    // Monta query de busca com modelo + ano (mais específico)
+    const queryComAno = `${modelo} ${ano}`.trim();
+    const querySemAno = modelo.trim();
+
+    // Tenta primeiro com modelo + ano no título
+    console.log(`Buscando nos anúncios da loja: "${queryComAno}"...`);
+    let resp = await axios.get(
+      `https://api.mercadolibre.com/sites/${SITE_ID}/search?seller_id=${USER_ID}&q=${encodeURIComponent(queryComAno)}&limit=10`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    let candidatos = resp.data.results || [];
+    console.log(`Encontrados ${candidatos.length} anúncios com "${queryComAno}"`);
+
+    // Se não encontrou com ano, tenta só pelo modelo
+    if (candidatos.length === 0) {
+      console.log(`Buscando nos anúncios da loja: "${querySemAno}"...`);
+      resp = await axios.get(
+        `https://api.mercadolibre.com/sites/${SITE_ID}/search?seller_id=${USER_ID}&q=${encodeURIComponent(querySemAno)}&limit=20`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      candidatos = resp.data.results || [];
+      console.log(`Encontrados ${candidatos.length} anúncios com "${querySemAno}"`);
+    }
+
+    if (candidatos.length === 0) return null;
+
+    // Filtra candidatos pelo tipo de produto (ex: só "protetor de motor", não outros)
+    const candidatosFiltrados = candidatos.filter(c => {
+      const tituloLower = c.title.toLowerCase();
+      // Remove o anúncio atual da busca
+      if (c.id === tituloAnuncio) return false;
+      // Verifica se é do mesmo tipo de produto
+      return tipoProduto ? tituloLower.includes(tipoProduto.split(' ')[0].toLowerCase()) : true;
+    });
+
+    console.log(`Candidatos após filtro por tipo: ${candidatosFiltrados.length}`);
+
+    // Para cada candidato, verifica compatibilidade na descrição
+    for (const candidato of candidatosFiltrados.slice(0, 5)) {
+      console.log(`Verificando compatibilidade: "${candidato.title}"`);
+
+      // Primeiro verifica se o ano está no título
+      const anoNoTitulo = candidato.title.includes(ano);
+
+      // Busca detalhes do item para verificar descrição
+      const { data: itemDetalhes } = await axios.get(
+        `https://api.mercadolibre.com/items/${candidato.id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      const textoCompleto = `${itemDetalhes.title} ${itemDetalhes.description || ''}`.toLowerCase();
+      const modeloOk = textoCompleto.includes(modelo.toLowerCase().replace(/\s/g, '')) ||
+                       textoCompleto.includes(modelo.toLowerCase());
+      const anoOk = textoCompleto.includes(ano);
+      const cambioOk = !cambio || cambio === 'manual'
+        ? !textoCompleto.includes('dct') || textoCompleto.includes('mt') || textoCompleto.includes('manual')
+        : textoCompleto.includes('dct') || textoCompleto.includes('automático') || textoCompleto.includes('automatico');
+
+      console.log(`  modelo: ${modeloOk}, ano: ${anoOk}, câmbio: ${cambioOk}`);
+
+      if (modeloOk && anoOk) {
+        console.log(`Equivalente encontrado: ${candidato.title}`);
+        return {
+          titulo: itemDetalhes.title,
+          link: itemDetalhes.permalink,
+        };
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.error('Erro ao buscar equivalente na loja:', err.response?.data || err.message);
+    return null;
+  }
+}
+
+// ─── Função principal de processamento ───────────────────────────────────────
 async function processarPergunta(questionId) {
   let token = await getValidToken();
   let question;
@@ -312,8 +281,9 @@ async function processarPergunta(questionId) {
     try {
       const textoExtraido = extraido.content[0].text.trim().replace(/```json|```/g, '').trim();
       console.log('Texto extraído da pergunta:', textoExtraido);
-      let { marca, modelo, ano } = JSON.parse(textoExtraido);
-      console.log(`Dados extraídos — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"`);
+      let { marca, modelo, ano, cambio: cambioExtraido } = JSON.parse(textoExtraido);
+      cambio = cambioExtraido || '';
+      console.log(`Dados extraídos — marca: "${marca}", modelo: "${modelo}", ano: "${ano}", câmbio: "${cambio}"`);
 
       // Fallback: se não encontrou modelo ou marca na pergunta, busca no anúncio
       if ((!modelo || !marca) && ano) {
@@ -329,16 +299,18 @@ async function processarPergunta(questionId) {
         }
       }
 
-      console.log(`Dados finais para busca — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"`);
+      console.log(`Dados finais — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"`);
 
       if (!modelo) {
         dadosMotoIncompletos = 'FALTANDO_MODELO';
       } else if (!ano) {
         dadosMotoIncompletos = 'FALTANDO_ANO';
       } else {
-        const equivalente = await buscarEquivalenteCompativel(item.title, marca || '', modelo, ano, token);
-        if (equivalente?.anuncio) {
-          infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.anuncio.titulo}\nLink: ${equivalente.anuncio.link}`;
+        // Busca equivalente nos anúncios da loja no ML
+        const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, cambio, token);
+        if (equivalente) {
+          infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.titulo}\nLink: ${equivalente.link}`;
+          console.log('Equivalente encontrado:', equivalente.titulo);
         }
       }
     } catch (err) {
@@ -353,8 +325,8 @@ Descrição: ${item.description || 'Não disponível'}
 Atributos: ${JSON.stringify(item.attributes?.slice(0, 10))}
 Variações disponíveis e estoque:\n${variacoesTexto}
 Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
-Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
 Câmbio informado pelo cliente: ${cambio || 'não informado'}
+Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
 ${infoEquivalente}
 
 Pergunta do cliente: ${question.text}
@@ -368,7 +340,7 @@ Diretrizes:
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_MODELO: responda APENAS pedindo o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?"
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?"
 - CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja": informe que esse produto não é compatível mas temos o equivalente disponível e inclua o link do anúncio
-- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO. NUNCA mencione fabricante, manual, especificações técnicas ou qualquer fonte externa
+- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
 - REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um especialista poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
 - Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
@@ -443,14 +415,12 @@ app.get('/revisar', (req, res) => {
   res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revisão de Respostas</title><style>body{font-family:sans-serif;max-width:640px;margin:40px auto;padding:20px;background:#f5f5f5}h1{color:#333;margin-bottom:20px}</style></head><body><h1>Revisão de Respostas (${pendentes.length})</h1>${cards}</body></html>`);
 });
 
-// ─── Aprovar resposta ─────────────────────────────────────────────────────────
+// ─── Aprovar ──────────────────────────────────────────────────────────────────
 app.post('/aprovar', async (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   const { id } = req.body;
-  const pendentes = getPendentes();
-  const pendente = pendentes.find(p => p.id === id);
+  const pendente = getPendentes().find(p => p.id === id);
   if (!pendente) return res.send('Resposta não encontrada.');
-
   try {
     let token = await getValidToken();
     try {
@@ -465,17 +435,15 @@ app.post('/aprovar', async (req, res) => {
     console.log(`Resposta aprovada e enviada (pergunta ${id}).`);
     res.redirect(`/revisar?senha=${req.query.senha}`);
   } catch (err) {
-    console.error('Erro ao enviar resposta:', err.response?.data || err.message);
-    res.send('Erro ao enviar resposta: ' + JSON.stringify(err.response?.data || err.message));
+    res.send('Erro ao enviar: ' + JSON.stringify(err.response?.data || err.message));
   }
 });
 
-// ─── Rejeitar resposta ────────────────────────────────────────────────────────
+// ─── Rejeitar ─────────────────────────────────────────────────────────────────
 app.post('/rejeitar', (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
-  const { id } = req.body;
-  removerPendente(id);
-  console.log(`Resposta rejeitada (pergunta ${id}).`);
+  removerPendente(req.body.id);
+  console.log(`Resposta rejeitada (pergunta ${req.body.id}).`);
   res.redirect(`/revisar?senha=${req.query.senha}`);
 });
 
@@ -487,7 +455,7 @@ app.post('/setup-token', (req, res) => {
   const { senha, tokens } = req.body;
   if (senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   saveTokens(tokens);
-  res.send('Token salvo com sucesso no disco persistente!');
+  res.send('Token salvo com sucesso!');
 });
 
 // ─── Get token ───────────────────────────────────────────────────────────────
@@ -498,7 +466,7 @@ app.get('/get-token', (req, res) => {
   res.json(tokens);
 });
 
-// ─── Forçar processamento de pergunta específica ──────────────────────────────
+// ─── Forçar pergunta ─────────────────────────────────────────────────────────
 app.post('/forcar-pergunta', (req, res) => {
   const { senha, question_id } = req.body;
   if (senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
@@ -508,14 +476,13 @@ app.post('/forcar-pergunta', (req, res) => {
   setTimeout(async () => {
     try {
       await processarPergunta(question_id);
-      console.log(`Pergunta ${question_id} forçada com sucesso.`);
     } catch (err) {
       console.error(`Erro ao forçar pergunta ${question_id}:`, err.message);
     } finally {
       process.env.DELAY_ATIVO = originalDelay;
     }
   }, 100);
-  res.send(`Processando pergunta ${question_id} agora...`);
+  res.send(`Processando pergunta ${question_id}...`);
 });
 
 const PORT = process.env.PORT || 3000;
