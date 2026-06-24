@@ -133,17 +133,25 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
 
     // Busca todos os IDs de anúncios ativos
     console.log('Buscando lista de anúncios da loja...');
-    let todosIds = [];
-    let offset = 0;
-    while (true) {
-      const respLista = await axios.get(
-        `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50&offset=${offset}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      const ids = respLista.data.results || [];
-      todosIds = todosIds.concat(ids);
-      if (ids.length < 50) break;
-      offset += 50;
+    const respLista = await axios.get(
+      `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const paging = respLista.data.paging || {};
+    const total = paging.total || 0;
+    let todosIds = respLista.data.results || [];
+
+    // Se tem mais de 50, busca o restante
+    if (total > 50) {
+      const reqs = [];
+      for (let offset = 50; offset < total; offset += 50) {
+        reqs.push(axios.get(
+          `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50&offset=${offset}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        ));
+      }
+      const respostas = await Promise.all(reqs);
+      for (const r of respostas) todosIds = todosIds.concat(r.data.results || []);
     }
     console.log(`Total de anúncios ativos: ${todosIds.length}`);
     if (todosIds.length === 0) return null;
