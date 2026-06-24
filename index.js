@@ -131,74 +131,73 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
     const tipoProduto = await extrairTipoProduto(tituloAnuncio);
     console.log('Tipo de produto identificado:', tipoProduto);
 
-    // Monta query de busca com modelo + ano (mais específico)
-    const queryComAno = `${modelo} ${ano}`.trim();
-    const querySemAno = modelo.trim();
-
-    // Tenta primeiro com modelo + ano no título
-    console.log(`Buscando nos anúncios da loja: "${queryComAno}"...`);
-    let resp = await axios.get(
-      `https://api.mercadolibre.com/sites/${SITE_ID}/search?seller_id=${USER_ID}&q=${encodeURIComponent(queryComAno)}&limit=10`,
+    // Busca todos os IDs de anúncios ativos do vendedor
+    console.log('Buscando lista de anúncios da loja...');
+    const respLista = await axios.get(
+      `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    let candidatos = resp.data.results || [];
-    console.log(`Encontrados ${candidatos.length} anúncios com "${queryComAno}"`);
+    const todosIds = respLista.data.results || [];
+    console.log(`Total de anúncios ativos: ${todosIds.length}`);
 
-    // Se não encontrou com ano, tenta só pelo modelo
-    if (candidatos.length === 0) {
-      console.log(`Buscando nos anúncios da loja: "${querySemAno}"...`);
-      resp = await axios.get(
-        `https://api.mercadolibre.com/sites/${SITE_ID}/search?seller_id=${USER_ID}&q=${encodeURIComponent(querySemAno)}&limit=20`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      candidatos = resp.data.results || [];
-      console.log(`Encontrados ${candidatos.length} anúncios com "${querySemAno}"`);
+    if (todosIds.length === 0) return null;
+
+    // Busca detalhes de até 20 anúncios por vez (multiget)
+    const lotes = [];
+    for (let i = 0; i < todosIds.length; i += 20) {
+      lotes.push(todosIds.slice(i, i + 20));
     }
 
-    if (candidatos.length === 0) return null;
+    const modeloNorm = modelo.toLowerCase().replace(/\s/g, '');
+    const tipoProdutoNorm = tipoProduto.toLowerCase().split(' ')[0];
+    const candidatos = [];
 
-    // Filtra candidatos pelo tipo de produto (ex: só "protetor de motor", não outros)
-    const candidatosFiltrados = candidatos.filter(c => {
-      const tituloLower = c.title.toLowerCase();
-      // Remove o anúncio atual da busca
-      if (c.id === tituloAnuncio) return false;
-      // Verifica se é do mesmo tipo de produto
-      return tipoProduto ? tituloLower.includes(tipoProduto.split(' ')[0].toLowerCase()) : true;
-    });
-
-    console.log(`Candidatos após filtro por tipo: ${candidatosFiltrados.length}`);
-
-    // Para cada candidato, verifica compatibilidade na descrição
-    for (const candidato of candidatosFiltrados.slice(0, 5)) {
-      console.log(`Verificando compatibilidade: "${candidato.title}"`);
-
-      // Primeiro verifica se o ano está no título
-      const anoNoTitulo = candidato.title.includes(ano);
-
-      // Busca detalhes do item para verificar descrição
-      const { data: itemDetalhes } = await axios.get(
-        `https://api.mercadolibre.com/items/${candidato.id}`,
+    for (const lote of lotes) {
+      const { data: itens } = await axios.get(
+        `https://api.mercadolibre.com/items?ids=${lote.join(',')}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      const textoCompleto = `${itemDetalhes.title} ${itemDetalhes.description || ''}`.toLowerCase();
-      const modeloOk = textoCompleto.includes(modelo.toLowerCase().replace(/\s/g, '')) ||
-                       textoCompleto.includes(modelo.toLowerCase());
+      for (const entry of itens) {
+        if (entry.code !== 200) continue;
+        const item = entry.body;
+        const tituloLower = item.title.toLowerCase();
+
+        // Filtra pelo tipo de produto e pelo modelo
+        const tipoOk = tipoProdutoNorm ? tituloLower.includes(tipoProdutoNorm) : true;
+        const modeloOk = tituloLower.includes(modeloNorm) || tituloLower.includes(modelo.toLowerCase());
+
+        if (tipoOk && modeloOk) {
+          candidatos.push(item);
+        }
+      }
+    }
+
+    console.log(`Candidatos encontrados: ${candidatos.length}`);
+    if (candidatos.length === 0) return null;
+
+    // Verifica compatibilidade com o ano e câmbio em cada candidato
+    for (const candidato of candidatos.slice(0, 10)) {
+      console.log(`Verificando: "${candidato.title}"`);
+      const textoCompleto = `${candidato.title} ${candidato.description || ''}`.toLowerCase();
       const anoOk = textoCompleto.includes(ano);
       const cambioOk = !cambio || cambio === 'manual'
         ? !textoCompleto.includes('dct') || textoCompleto.includes('mt') || textoCompleto.includes('manual')
         : textoCompleto.includes('dct') || textoCompleto.includes('automático') || textoCompleto.includes('automatico');
 
-      console.log(`  modelo: ${modeloOk}, ano: ${anoOk}, câmbio: ${cambioOk}`);
+      console.log(`  ano: ${anoOk}, câmbio: ${cambioOk}`);
 
-      if (modeloOk && anoOk) {
+      if (anoOk) {
         console.log(`Equivalente encontrado: ${candidato.title}`);
-        return {
-          titulo: itemDetalhes.title,
-          link: itemDetalhes.permalink,
-        };
+        return { titulo: candidato.title, link: candidato.permalink };
       }
+    }
+
+    // Se não achou com o ano exato, retorna o mais próximo pelo modelo
+    if (candidatos.length > 0) {
+      console.log(`Sem ano exato — retornando mais próximo: ${candidatos[0].title}`);
+      return { titulo: candidatos[0].title, link: candidatos[0].permalink };
     }
 
     return null;
