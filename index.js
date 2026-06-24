@@ -135,9 +135,10 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
     let todosIds = respLista.data.results || [];
     console.log(`Total de anúncios ativos: ${total}, primeira página: ${todosIds.length}`);
 
-    // Busca páginas adicionais se necessário
+    // Busca páginas adicionais — limite máximo de offset é 1000
+    const maxOffset = Math.min(total, 1000);
     if (total > 50) {
-      for (let offset = 50; offset < total; offset += 50) {
+      for (let offset = 50; offset < maxOffset; offset += 50) {
         try {
           const r = await axios.get(
             `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50&offset=${offset}`,
@@ -150,6 +151,29 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         }
       }
     }
+    // Se tem mais de 1000 anúncios, usa scroll para buscar o restante
+    if (total > 1000) {
+      try {
+        let scrollId = null;
+        const r1 = await axios.get(
+          `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&search_type=scan`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        scrollId = r1.data.scroll_id;
+        while (scrollId) {
+          const r2 = await axios.get(
+            `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&search_type=scan&scroll_id=${scrollId}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const ids = r2.data.results || [];
+          if (ids.length === 0) break;
+          todosIds = todosIds.concat(ids);
+          scrollId = r2.data.scroll_id || null;
+        }
+      } catch (e) {
+        console.log('Erro no scroll:', e.message);
+      }
+    }
 
     if (todosIds.length === 0) return null;
 
@@ -157,13 +181,21 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
     const modeloNorm = modelo.toLowerCase().replace(/[\s\-]/g, '');
     const palavrasTipo = tipoProduto.split(' ').filter(p => p.length > 3);
 
-    // Busca títulos via multiget em lotes de 20
-    for (let i = 0; i < todosIds.length; i += 20) {
+    // Busca títulos via multiget em lotes de 20 — percorre TODOS os anúncios
+    let equivalenteEncontrado = null;
+    for (let i = 0; i < todosIds.length && !equivalenteEncontrado; i += 20) {
       const lote = todosIds.slice(i, i + 20);
-      const { data: itens } = await axios.get(
-        `https://api.mercadolibre.com/items?ids=${lote.join(',')}&attributes=id,title,permalink`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      let itens;
+      try {
+        const resp = await axios.get(
+          `https://api.mercadolibre.com/items?ids=${lote.join(',')}&attributes=id,title,permalink`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        itens = resp.data;
+      } catch (e) {
+        console.log(`Erro ao buscar lote ${i}-${i+20}:`, e.message);
+        continue;
+      }
 
       for (const entry of itens) {
         if (entry.code !== 200) continue;
@@ -188,10 +220,15 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         console.log(`  "${item.title}" | modelo:${modeloOk} tipo:${tipoOk} ano:${anoOk}`);
 
         if (anoOk) {
-          console.log(`Equivalente encontrado: ${item.title}`);
-          return { titulo: item.title, link: item.permalink };
+          equivalenteEncontrado = { titulo: item.title, link: item.permalink };
+          break;
         }
       }
+    }
+
+    if (equivalenteEncontrado) {
+      console.log(`Equivalente encontrado: ${equivalenteEncontrado.titulo}`);
+      return equivalenteEncontrado;
     }
 
     console.log('Nenhum equivalente encontrado com ano no título.');
