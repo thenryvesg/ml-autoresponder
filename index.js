@@ -17,7 +17,7 @@ const PENDENTES_PATH = process.env.RENDER
   : path.join(__dirname, 'pendentes.json');
 
 const USER_ID = '299804329';
-const SITE_ID = 'MLB';
+const TIMEOUT_APROVACAO_MS = 30 * 60 * 1000; // 30 minutos
 
 function getTokens() {
   if (fs.existsSync(TOKENS_PATH)) return JSON.parse(fs.readFileSync(TOKENS_PATH));
@@ -74,6 +74,48 @@ async function getValidToken() {
   return tokens.access_token;
 }
 
+// ─── Envia resposta no ML ─────────────────────────────────────────────────────
+async function enviarResposta(questionId, texto) {
+  let token = await getValidToken();
+  try {
+    await axios.post(
+      'https://api.mercadolibre.com/answers',
+      { question_id: parseInt(questionId), text: texto },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+  } catch (err) {
+    if (err.response?.status === 401) {
+      token = await refreshAccessToken();
+      await axios.post(
+        'https://api.mercadolibre.com/answers',
+        { question_id: parseInt(questionId), text: texto },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+    } else throw err;
+  }
+}
+
+// ─── Agenda aprovação automática após 30 minutos ──────────────────────────────
+function agendarAprovacaoAutomatica(questionId, resposta) {
+  console.log(`Aprovação automática agendada em 30 minutos (pergunta ${questionId}).`);
+  setTimeout(async () => {
+    const pendentes = getPendentes();
+    const pendente = pendentes.find(p => p.id === questionId);
+    if (!pendente) {
+      console.log(`Pergunta ${questionId} já foi tratada manualmente.`);
+      return;
+    }
+    try {
+      // Usa a resposta atual (pode ter sido editada)
+      await enviarResposta(questionId, pendente.resposta);
+      removerPendente(questionId);
+      console.log(`Resposta aprovada automaticamente após 30 minutos (pergunta ${questionId}).`);
+    } catch (err) {
+      console.error(`Erro na aprovação automática (pergunta ${questionId}):`, err.response?.data || err.message);
+    }
+  }, TIMEOUT_APROVACAO_MS);
+}
+
 // ─── Extrai marca e modelo do anúncio via Claude ──────────────────────────────
 async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio) {
   try {
@@ -125,7 +167,6 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
     const tipoProduto = await extrairTipoProduto(tituloAnuncio);
     console.log('Tipo de produto identificado:', tipoProduto);
 
-    // Busca primeira página de anúncios ativos
     const respLista = await axios.get(
       `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50`,
       { headers: { Authorization: `Bearer ${token}` } }
@@ -135,7 +176,6 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
     let todosIds = respLista.data.results || [];
     console.log(`Total de anúncios ativos: ${total}, primeira página: ${todosIds.length}`);
 
-    // Busca páginas adicionais — limite máximo de offset é 1000
     const maxOffset = Math.min(total, 1000);
     if (total > 50) {
       for (let offset = 50; offset < maxOffset; offset += 50) {
@@ -151,15 +191,14 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         }
       }
     }
-    // Se tem mais de 1000 anúncios, usa scroll para buscar o restante
+
     if (total > 1000) {
       try {
-        let scrollId = null;
         const r1 = await axios.get(
           `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&search_type=scan`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
-        scrollId = r1.data.scroll_id;
+        let scrollId = r1.data.scroll_id;
         while (scrollId) {
           const r2 = await axios.get(
             `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&search_type=scan&scroll_id=${scrollId}`,
@@ -177,13 +216,10 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
 
     if (todosIds.length === 0) return null;
 
-    // Normaliza modelo removendo espaços e hífens
     const modeloNorm = modelo.toLowerCase().replace(/[\s\-]/g, '');
     const palavrasTipo = tipoProduto.split(' ').filter(p => p.length > 3);
 
-    // Busca títulos via multiget em lotes de 20 — percorre TODOS os anúncios
-    let equivalenteEncontrado = null;
-    for (let i = 0; i < todosIds.length && !equivalenteEncontrado; i += 20) {
+    for (let i = 0; i < todosIds.length; i += 20) {
       const lote = todosIds.slice(i, i + 20);
       let itens;
       try {
@@ -203,16 +239,13 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         const tituloLower = item.title.toLowerCase();
         const tituloNorm = tituloLower.replace(/[\s\-]/g, '');
 
-        // Verifica modelo (normalizado)
         const modeloOk = tituloNorm.includes(modeloNorm);
         if (!modeloOk) continue;
 
-        // Verifica tipo de produto (pelo menos 2 palavras significativas)
         const palavrasOk = palavrasTipo.filter(p => tituloLower.includes(p));
         const tipoOk = palavrasTipo.length < 2 || palavrasOk.length >= 2;
         if (!tipoOk) continue;
 
-        // Verifica ano separado no título (com espaço ao redor)
         const anoOk = tituloLower.includes(` ${ano}`) || tituloLower.includes(`${ano} `) ||
                       tituloLower.endsWith(ano) || tituloLower.includes(`${ano}+`) ||
                       tituloLower.includes(`${ano}-`);
@@ -220,15 +253,10 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         console.log(`  "${item.title}" | modelo:${modeloOk} tipo:${tipoOk} ano:${anoOk}`);
 
         if (anoOk) {
-          equivalenteEncontrado = { titulo: item.title, link: item.permalink };
-          break;
+          console.log(`Equivalente encontrado: ${item.title}`);
+          return { titulo: item.title, link: item.permalink };
         }
       }
-    }
-
-    if (equivalenteEncontrado) {
-      console.log(`Equivalente encontrado: ${equivalenteEncontrado.titulo}`);
-      return equivalenteEncontrado;
     }
 
     console.log('Nenhum equivalente encontrado com ano no título.');
@@ -264,21 +292,8 @@ async function processarPergunta(questionId) {
   const diaSemana = agora.getDay();
   const hora = agora.getHours();
   const ehHorarioComercial = diaSemana >= 1 && diaSemana <= 5 && hora >= 9 && hora < 18;
-  const delayAtivo = process.env.DELAY_ATIVO !== 'false';
 
-  if (delayAtivo) {
-    const DELAY_MINUTOS = ehHorarioComercial ? 35 : 10;
-    console.log(`Aguardando ${DELAY_MINUTOS} minutos (pergunta ${questionId})...`);
-    await new Promise(resolve => setTimeout(resolve, DELAY_MINUTOS * 60 * 1000));
-    token = await getValidToken();
-    const { data: questionAtualizada } = await axios.get(`https://api.mercadolibre.com/questions/${questionId}`, { headers: { Authorization: `Bearer ${token}` } });
-    if (questionAtualizada.status !== 'UNANSWERED') {
-      console.log(`Pergunta ${questionId} já respondida manualmente.`);
-      return;
-    }
-  } else {
-    console.log(`Delay desativado — processando imediatamente (pergunta ${questionId}).`);
-  }
+  console.log(`Processando imediatamente (pergunta ${questionId})...`);
 
   const { data: item } = await axios.get(`https://api.mercadolibre.com/items/${question.item_id}`, { headers: { Authorization: `Bearer ${token}` } });
 
@@ -362,7 +377,7 @@ Diretrizes:
 - Se a informação não estiver nos dados, diga com transparência
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_MODELO: responda APENAS pedindo o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?"
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?"
-- CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja": informe que esse produto não é compatível mas temos o modelo equivalente disponível e inclua o link do anúncio. NÃO adicione o encaminhamento de especialista nesse caso — o link já é suficiente
+- CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja": informe que esse produto não é compatível mas temos o modelo equivalente disponível e inclua o link do anúncio. NÃO adicione o encaminhamento de especialista nesse caso
 - CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
 - REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um especialista poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
@@ -377,41 +392,20 @@ Responda em português do Brasil.`;
   );
 
   const respostaSugerida = aiResponse.content[0].text;
+  console.log('Resposta sugerida (aguardando aprovação por 30 min):', respostaSugerida);
 
-  if (ehHorarioComercial) {
-    // Horário comercial: salva para revisão manual
-    console.log('Resposta sugerida (aguardando aprovação):', respostaSugerida);
-    adicionarPendente({
-      id: questionId,
-      pergunta: question.text,
-      produto: item.title,
-      resposta: respostaSugerida,
-      criadoEm: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-    });
-    console.log(`Resposta pendente salva para revisão (pergunta ${questionId}).`);
-  } else {
-    // Fora do horário comercial: envia direto sem revisão
-    console.log('Fora do horário comercial — enviando resposta automaticamente:', respostaSugerida);
-    let token2 = await getValidToken();
-    try {
-      await axios.post(
-        'https://api.mercadolibre.com/answers',
-        { question_id: parseInt(questionId), text: respostaSugerida },
-        { headers: { Authorization: `Bearer ${token2}` } }
-      );
-      console.log(`Resposta enviada automaticamente (pergunta ${questionId}).`);
-    } catch (err) {
-      if (err.response?.status === 401) {
-        token2 = await refreshAccessToken();
-        await axios.post(
-          'https://api.mercadolibre.com/answers',
-          { question_id: parseInt(questionId), text: respostaSugerida },
-          { headers: { Authorization: `Bearer ${token2}` } }
-        );
-        console.log(`Resposta enviada automaticamente após renovação (pergunta ${questionId}).`);
-      } else throw err;
-    }
-  }
+  // Salva como pendente e agenda aprovação automática em 30 minutos
+  adicionarPendente({
+    id: questionId,
+    pergunta: question.text,
+    produto: item.title,
+    resposta: respostaSugerida,
+    criadoEm: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+    expiraEm: new Date(Date.now() + TIMEOUT_APROVACAO_MS).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+  });
+
+  agendarAprovacaoAutomatica(questionId, respostaSugerida);
+  console.log(`Resposta pendente — será enviada automaticamente em 30 minutos se não houver ação (pergunta ${questionId}).`);
 }
 
 // ─── Webhook ──────────────────────────────────────────────────────────────────
@@ -436,50 +430,42 @@ app.get('/revisar', (req, res) => {
 
   const cards = pendentes.map(p => `
     <div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,0.1)">
-      <div style="font-size:12px;color:#999;margin-bottom:8px">${p.criadoEm} — Pergunta #${p.id}</div>
+      <div style="font-size:12px;color:#999;margin-bottom:4px">${p.criadoEm} — Pergunta #${p.id}</div>
+      <div style="font-size:12px;color:#f59e0b;margin-bottom:8px">⏱ Aprovação automática em: ${p.expiraEm}</div>
       <div style="font-size:13px;color:#555;margin-bottom:6px"><strong>Produto:</strong> ${p.produto}</div>
       <div style="background:#f0f4ff;padding:12px;border-radius:6px;margin-bottom:10px">
         <strong style="font-size:13px">Pergunta do cliente:</strong><br>
         <span style="font-size:15px">${p.pergunta}</span>
       </div>
-      <div style="background:#f0fff4;padding:12px;border-radius:6px;margin-bottom:16px">
-        <strong style="font-size:13px">Resposta sugerida:</strong><br>
-        <span style="font-size:15px">${p.resposta}</span>
-      </div>
-      <div style="display:flex;gap:10px">
-        <form method="POST" action="/aprovar?senha=${senha}" style="flex:1">
-          <input type="hidden" name="id" value="${p.id}">
-          <button type="submit" style="width:100%;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Aprovar e Enviar</button>
-        </form>
-        <form method="POST" action="/rejeitar?senha=${senha}" style="flex:1">
-          <input type="hidden" name="id" value="${p.id}">
-          <button type="submit" style="width:100%;padding:12px;background:#ef4444;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Rejeitar</button>
-        </form>
-      </div>
+      <form method="POST" action="/editar-e-aprovar?senha=${senha}">
+        <input type="hidden" name="id" value="${p.id}">
+        <div style="margin-bottom:10px">
+          <strong style="font-size:13px">Resposta (editável):</strong><br>
+          <textarea name="resposta" style="width:100%;min-height:100px;margin-top:6px;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:sans-serif;box-sizing:border-box">${p.resposta}</textarea>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="submit" style="flex:1;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Aprovar e Enviar</button>
+        </div>
+      </form>
+      <form method="POST" action="/rejeitar?senha=${senha}" style="margin-top:8px">
+        <input type="hidden" name="id" value="${p.id}">
+        <button type="submit" style="width:100%;padding:12px;background:#ef4444;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Rejeitar (não enviar)</button>
+      </form>
     </div>
   `).join('');
 
   res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revisão de Respostas</title><style>body{font-family:sans-serif;max-width:640px;margin:40px auto;padding:20px;background:#f5f5f5}h1{color:#333;margin-bottom:20px}</style></head><body><h1>Revisão de Respostas (${pendentes.length})</h1>${cards}</body></html>`);
 });
 
-// ─── Aprovar ──────────────────────────────────────────────────────────────────
-app.post('/aprovar', async (req, res) => {
+// ─── Editar e aprovar ─────────────────────────────────────────────────────────
+app.post('/editar-e-aprovar', async (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
-  const { id } = req.body;
-  const pendente = getPendentes().find(p => p.id === id);
-  if (!pendente) return res.send('Resposta não encontrada.');
+  const { id, resposta } = req.body;
+  if (!id || !resposta) return res.status(400).send('Dados incompletos.');
   try {
-    let token = await getValidToken();
-    try {
-      await axios.post('https://api.mercadolibre.com/answers', { question_id: parseInt(id), text: pendente.resposta }, { headers: { Authorization: `Bearer ${token}` } });
-    } catch (err) {
-      if (err.response?.status === 401) {
-        token = await refreshAccessToken();
-        await axios.post('https://api.mercadolibre.com/answers', { question_id: parseInt(id), text: pendente.resposta }, { headers: { Authorization: `Bearer ${token}` } });
-      } else throw err;
-    }
+    await enviarResposta(id, resposta);
     removerPendente(id);
-    console.log(`Resposta aprovada e enviada (pergunta ${id}).`);
+    console.log(`Resposta aprovada e enviada manualmente (pergunta ${id}).`);
     res.redirect(`/revisar?senha=${req.query.senha}`);
   } catch (err) {
     res.send('Erro ao enviar: ' + JSON.stringify(err.response?.data || err.message));
@@ -518,15 +504,11 @@ app.post('/forcar-pergunta', (req, res) => {
   const { senha, question_id } = req.body;
   if (senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   if (!question_id) return res.status(400).send('question_id obrigatório.');
-  const originalDelay = process.env.DELAY_ATIVO;
-  process.env.DELAY_ATIVO = 'false';
   setTimeout(async () => {
     try {
       await processarPergunta(question_id);
     } catch (err) {
       console.error(`Erro ao forçar pergunta ${question_id}:`, err.message);
-    } finally {
-      process.env.DELAY_ATIVO = originalDelay;
     }
   }, 100);
   res.send(`Processando pergunta ${question_id}...`);
