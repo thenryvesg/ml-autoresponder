@@ -74,7 +74,7 @@ async function getValidToken() {
   return tokens.access_token;
 }
 
-// ─── Extrai marca e/ou modelo do título e descrição do anúncio via Claude ────
+// ─── Extrai marca e modelo do anúncio via Claude ──────────────────────────────
 async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio) {
   try {
     const { data } = await axios.post(
@@ -84,10 +84,7 @@ async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio) {
         max_tokens: 80,
         messages: [{
           role: 'user',
-          content: `Do título e descrição do anúncio abaixo, extraia a marca e o modelo da moto. Responda APENAS em JSON no formato {"marca":"","modelo":""} sem mais nada. Se não encontrar algum campo, deixe vazio.
-
-Título: "${tituloAnuncio}"
-Descrição: "${(descricaoAnuncio || '').slice(0, 500)}"`
+          content: `Do título e descrição do anúncio abaixo, extraia a marca e o modelo da moto. Responda APENAS em JSON no formato {"marca":"","modelo":""} sem mais nada. Se não encontrar algum campo, deixe vazio.\n\nTítulo: "${tituloAnuncio}"\nDescrição: "${(descricaoAnuncio || '').slice(0, 500)}"`
         }],
       },
       { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
@@ -101,7 +98,7 @@ Descrição: "${(descricaoAnuncio || '').slice(0, 500)}"`
   }
 }
 
-// ─── Extrai tipo de produto do título do anúncio ─────────────────────────────
+// ─── Extrai tipo de produto do título via Claude ──────────────────────────────
 async function extrairTipoProduto(tituloAnuncio) {
   try {
     const { data } = await axios.post(
@@ -111,99 +108,93 @@ async function extrairTipoProduto(tituloAnuncio) {
         max_tokens: 50,
         messages: [{
           role: 'user',
-          content: `Do título do anúncio abaixo, extraia apenas o tipo/nome do produto (ex: "protetor de motor", "suporte GPS", "protetor de mão"). Responda APENAS com o tipo do produto, sem marca, sem modelo, sem ano.
-
-Título: "${tituloAnuncio}"`
+          content: `Do título do anúncio abaixo, extraia apenas o tipo/nome do produto (ex: "protetor de motor", "suporte GPS", "protetor de mão"). Responda APENAS com o tipo do produto, sem marca, sem modelo, sem ano, sem código.\n\nTítulo: "${tituloAnuncio}"`
         }],
       },
       { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
-    return data.content[0].text.trim();
+    return data.content[0].text.trim().toLowerCase();
   } catch {
     return '';
   }
 }
 
-// ─── Busca anúncio equivalente nos anúncios do vendedor no ML ────────────────
-async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio, token) {
+// ─── Busca anúncio equivalente nos anúncios do vendedor ──────────────────────
+async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token) {
   try {
-    // Extrai o tipo do produto para montar a query
     const tipoProduto = await extrairTipoProduto(tituloAnuncio);
     console.log('Tipo de produto identificado:', tipoProduto);
 
-    // Busca todos os IDs de anúncios ativos
-    console.log('Buscando lista de anúncios da loja...');
+    // Busca primeira página de anúncios ativos
     const respLista = await axios.get(
       `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    const paging = respLista.data.paging || {};
-    const total = paging.total || 0;
-    let todosIds = respLista.data.results || [];
 
-    // Se tem mais de 50, busca o restante
+    const total = respLista.data.paging?.total || 0;
+    let todosIds = respLista.data.results || [];
+    console.log(`Total de anúncios ativos: ${total}, primeira página: ${todosIds.length}`);
+
+    // Busca páginas adicionais se necessário
     if (total > 50) {
-      const reqs = [];
       for (let offset = 50; offset < total; offset += 50) {
-        reqs.push(axios.get(
-          `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50&offset=${offset}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        ));
+        try {
+          const r = await axios.get(
+            `https://api.mercadolibre.com/users/${USER_ID}/items/search?status=active&limit=50&offset=${offset}`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          todosIds = todosIds.concat(r.data.results || []);
+        } catch (e) {
+          console.log(`Erro ao buscar offset ${offset}:`, e.message);
+          break;
+        }
       }
-      const respostas = await Promise.all(reqs);
-      for (const r of respostas) todosIds = todosIds.concat(r.data.results || []);
     }
-    console.log(`Total de anúncios ativos: ${todosIds.length}`);
+
     if (todosIds.length === 0) return null;
 
-    // Normaliza modelo para comparação: remove espaços e caracteres especiais
+    // Normaliza modelo removendo espaços e hífens
     const modeloNorm = modelo.toLowerCase().replace(/[\s\-]/g, '');
-    const palavrasTipo = tipoProduto.toLowerCase().split(' ').filter(p => p.length > 3);
+    const palavrasTipo = tipoProduto.split(' ').filter(p => p.length > 3);
 
     // Busca títulos via multiget em lotes de 20
-    const candidatos = [];
     for (let i = 0; i < todosIds.length; i += 20) {
       const lote = todosIds.slice(i, i + 20);
       const { data: itens } = await axios.get(
         `https://api.mercadolibre.com/items?ids=${lote.join(',')}&attributes=id,title,permalink`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
+
       for (const entry of itens) {
         if (entry.code !== 200) continue;
         const item = entry.body;
         const tituloLower = item.title.toLowerCase();
         const tituloNorm = tituloLower.replace(/[\s\-]/g, '');
 
-        // Verifica modelo (normalizado sem espaços/hífens)
+        // Verifica modelo (normalizado)
         const modeloOk = tituloNorm.includes(modeloNorm);
+        if (!modeloOk) continue;
 
         // Verifica tipo de produto (pelo menos 2 palavras significativas)
         const palavrasOk = palavrasTipo.filter(p => tituloLower.includes(p));
         const tipoOk = palavrasTipo.length < 2 || palavrasOk.length >= 2;
+        if (!tipoOk) continue;
 
-        // Verifica ano — busca o ano separado no título original (com espaços)
-        // Ex: "Nc 750x 2026+" → procura " 2026" para garantir que é o ano, não parte do modelo
-        const anoOk = tituloLower.includes(` ${ano}`) || tituloLower.includes(`${ano} `) || tituloLower.endsWith(ano) || tituloLower.includes(`${ano}+`) || tituloLower.includes(`${ano}-`);
+        // Verifica ano separado no título (com espaço ao redor)
+        const anoOk = tituloLower.includes(` ${ano}`) || tituloLower.includes(`${ano} `) ||
+                      tituloLower.endsWith(ano) || tituloLower.includes(`${ano}+`) ||
+                      tituloLower.includes(`${ano}-`);
 
         console.log(`  "${item.title}" | modelo:${modeloOk} tipo:${tipoOk} ano:${anoOk}`);
 
-        if (modeloOk && tipoOk && anoOk) {
-          candidatos.push(item);
+        if (anoOk) {
+          console.log(`Equivalente encontrado: ${item.title}`);
+          return { titulo: item.title, link: item.permalink };
         }
       }
     }
 
-    console.log(`Candidatos com ano no título: ${candidatos.length}`);
-
-    if (candidatos.length > 0) {
-      console.log(`Equivalente encontrado: ${candidatos[0].title}`);
-      return { titulo: candidatos[0].title, link: candidatos[0].permalink };
-    }
-
-    // Não encontrou com ano no título — busca só por modelo + tipo na descrição
-    console.log('Sem candidatos com ano no título — nenhum equivalente encontrado.');
-    return null;
-
+    console.log('Nenhum equivalente encontrado com ano no título.');
     return null;
   } catch (err) {
     console.error('Erro ao buscar equivalente na loja:', err.response?.data || err.message);
@@ -288,18 +279,11 @@ async function processarPergunta(questionId) {
       cambio = cambioExtraido || '';
       console.log(`Dados extraídos — marca: "${marca}", modelo: "${modelo}", ano: "${ano}", câmbio: "${cambio}"`);
 
-      // Fallback: se não encontrou modelo ou marca na pergunta, busca no anúncio
       if ((!modelo || !marca) && ano) {
         console.log('Modelo ou marca ausentes — buscando no anúncio...');
         const dadosAnuncio = await extrairDadosDoAnuncio(item.title, item.description);
-        if (!modelo && dadosAnuncio.modelo) {
-          console.log(`Modelo extraído do anúncio: "${dadosAnuncio.modelo}"`);
-          modelo = dadosAnuncio.modelo;
-        }
-        if (!marca && dadosAnuncio.marca) {
-          console.log(`Marca extraída do anúncio: "${dadosAnuncio.marca}"`);
-          marca = dadosAnuncio.marca;
-        }
+        if (!modelo && dadosAnuncio.modelo) { modelo = dadosAnuncio.modelo; console.log(`Modelo extraído do anúncio: "${modelo}"`); }
+        if (!marca && dadosAnuncio.marca) { marca = dadosAnuncio.marca; console.log(`Marca extraída do anúncio: "${marca}"`); }
       }
 
       console.log(`Dados finais — marca: "${marca}", modelo: "${modelo}", ano: "${ano}"`);
@@ -309,8 +293,7 @@ async function processarPergunta(questionId) {
       } else if (!ano) {
         dadosMotoIncompletos = 'FALTANDO_ANO';
       } else {
-        // Busca equivalente nos anúncios da loja no ML
-        const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, cambio, token);
+        const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, token);
         if (equivalente) {
           infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.titulo}\nLink: ${equivalente.link}`;
           console.log('Equivalente encontrado:', equivalente.titulo);
