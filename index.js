@@ -149,8 +149,9 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
       lotes.push(todosIds.slice(i, i + 20));
     }
 
+    // Usa palavras-chave do tipo de produto para filtrar (pelo menos 2 palavras)
+    const palavrasTipo = tipoProduto.toLowerCase().split(' ').filter(p => p.length > 3);
     const modeloNorm = modelo.toLowerCase().replace(/\s/g, '');
-    const tipoProdutoNorm = tipoProduto.toLowerCase().split(' ')[0];
     const candidatos = [];
 
     for (const lote of lotes) {
@@ -163,30 +164,31 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
         if (entry.code !== 200) continue;
         const item = entry.body;
         const tituloLower = item.title.toLowerCase();
+        const tituloNorm = tituloLower.replace(/\s/g, '');
 
-        // Filtra pelo tipo de produto e pelo modelo
-        const tipoOk = tipoProdutoNorm ? tituloLower.includes(tipoProdutoNorm) : true;
-        const modeloOk = tituloLower.includes(modeloNorm) || tituloLower.includes(modelo.toLowerCase());
+        // Filtra pelo modelo
+        const modeloOk = tituloNorm.includes(modeloNorm) || tituloLower.includes(modelo.toLowerCase());
+        if (!modeloOk) continue;
 
-        if (tipoOk && modeloOk) {
-          candidatos.push(item);
-        }
+        // Filtra pelo tipo de produto — pelo menos 2 palavras significativas devem aparecer no título
+        const palavrasNoTitulo = palavrasTipo.filter(p => tituloLower.includes(p));
+        const tipoOk = palavrasTipo.length === 0 || palavrasNoTitulo.length >= Math.min(2, palavrasTipo.length);
+        if (!tipoOk) continue;
+
+        candidatos.push(item);
       }
     }
 
     console.log(`Candidatos encontrados: ${candidatos.length}`);
     if (candidatos.length === 0) return null;
 
-    // Verifica compatibilidade com o ano e câmbio em cada candidato
+    // Verifica compatibilidade com o ano em cada candidato
     for (const candidato of candidatos.slice(0, 10)) {
       console.log(`Verificando: "${candidato.title}"`);
       const textoCompleto = `${candidato.title} ${candidato.description || ''}`.toLowerCase();
       const anoOk = textoCompleto.includes(ano);
-      const cambioOk = !cambio || cambio === 'manual'
-        ? !textoCompleto.includes('dct') || textoCompleto.includes('mt') || textoCompleto.includes('manual')
-        : textoCompleto.includes('dct') || textoCompleto.includes('automático') || textoCompleto.includes('automatico');
 
-      console.log(`  ano: ${anoOk}, câmbio: ${cambioOk}`);
+      console.log(`  ano: ${anoOk}`);
 
       if (anoOk) {
         console.log(`Equivalente encontrado: ${candidato.title}`);
@@ -194,11 +196,9 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
       }
     }
 
-    // Se não achou com o ano exato, retorna o mais próximo pelo modelo
-    if (candidatos.length > 0) {
-      console.log(`Sem ano exato — retornando mais próximo: ${candidatos[0].title}`);
-      return { titulo: candidatos[0].title, link: candidatos[0].permalink };
-    }
+    // Não encontrou com o ano — não retorna nada (melhor encaminhar para especialista)
+    console.log('Nenhum equivalente encontrado com o ano exato.');
+    return null;
 
     return null;
   } catch (err) {
