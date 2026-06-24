@@ -377,17 +377,41 @@ Responda em português do Brasil.`;
   );
 
   const respostaSugerida = aiResponse.content[0].text;
-  console.log('Resposta sugerida (aguardando aprovação):', respostaSugerida);
 
-  adicionarPendente({
-    id: questionId,
-    pergunta: question.text,
-    produto: item.title,
-    resposta: respostaSugerida,
-    criadoEm: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-  });
-
-  console.log(`Resposta pendente salva para revisão (pergunta ${questionId}).`);
+  if (ehHorarioComercial) {
+    // Horário comercial: salva para revisão manual
+    console.log('Resposta sugerida (aguardando aprovação):', respostaSugerida);
+    adicionarPendente({
+      id: questionId,
+      pergunta: question.text,
+      produto: item.title,
+      resposta: respostaSugerida,
+      criadoEm: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+    });
+    console.log(`Resposta pendente salva para revisão (pergunta ${questionId}).`);
+  } else {
+    // Fora do horário comercial: envia direto sem revisão
+    console.log('Fora do horário comercial — enviando resposta automaticamente:', respostaSugerida);
+    let token2 = await getValidToken();
+    try {
+      await axios.post(
+        'https://api.mercadolibre.com/answers',
+        { question_id: parseInt(questionId), text: respostaSugerida },
+        { headers: { Authorization: `Bearer ${token2}` } }
+      );
+      console.log(`Resposta enviada automaticamente (pergunta ${questionId}).`);
+    } catch (err) {
+      if (err.response?.status === 401) {
+        token2 = await refreshAccessToken();
+        await axios.post(
+          'https://api.mercadolibre.com/answers',
+          { question_id: parseInt(questionId), text: respostaSugerida },
+          { headers: { Authorization: `Bearer ${token2}` } }
+        );
+        console.log(`Resposta enviada automaticamente após renovação (pergunta ${questionId}).`);
+      } else throw err;
+    }
+  }
 }
 
 // ─── Webhook ──────────────────────────────────────────────────────────────────
