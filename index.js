@@ -174,6 +174,7 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, cambio
           modelo.toLowerCase().replace(/\s+/g, ''),      // ex: nc750x
         ];
         const modeloOk = modeloVariacoes.some(v => tituloNorm.includes(v.replace(/\s/g, '')) || tituloLower.includes(v));
+        console.log(`  título: "${item.title}" | modeloOk: ${modeloOk} | variações testadas: ${JSON.stringify(modeloVariacoes)}`);
         if (!modeloOk) continue;
 
         // Filtra pelo tipo de produto — pelo menos 2 palavras significativas devem aparecer no título
