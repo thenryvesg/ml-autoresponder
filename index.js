@@ -356,11 +356,16 @@ async function processarPergunta(questionId) {
     }
   }
 
+  // Extrai a seção de aplicação da descrição para destacar no prompt
+  const descricao = item.description || '';
+  const aplicacaoMatch = descricao.match(/aplica[çc][aã]o do produto([\s\S]*?)(?:informa[çc][oõ]es do produto|código|$)/i);
+  const aplicacaoTexto = aplicacaoMatch ? aplicacaoMatch[1].trim() : descricao.slice(0, 800);
+
   const prompt = `Você é um assistente de vendas do Mercado Livre. Responda a pergunta do cliente de forma simpática, clara e objetiva, com base nos dados do produto. Não invente informações que não estão nos dados.
 
 Produto: ${item.title}
-Descrição: ${item.description || 'Não disponível'}
-Atributos: ${JSON.stringify(item.attributes?.slice(0, 10))}
+Aplicação do produto (modelos compatíveis — USE ISSO como fonte principal de compatibilidade, NÃO o título):
+${aplicacaoTexto || descricao.slice(0, 800) || 'Não disponível'}
 Variações disponíveis e estoque:\n${variacoesTexto}
 Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
 Câmbio informado pelo cliente: ${cambio || 'não informado'}
