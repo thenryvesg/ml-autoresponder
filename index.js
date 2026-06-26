@@ -385,7 +385,7 @@ Diretrizes:
 - CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja": informe que esse produto não é compatível mas temos o modelo equivalente disponível e inclua o link do anúncio. NÃO adicione o encaminhamento de especialista nesse caso
 - CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
-- REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um especialista poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
+- REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um atendente da loja poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
 - Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
 
 Responda em português do Brasil.`;
