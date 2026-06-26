@@ -17,7 +17,7 @@ const PENDENTES_PATH = process.env.RENDER
   : path.join(__dirname, 'pendentes.json');
 
 const USER_ID = '299804329';
-const TIMEOUT_APROVACAO_MS = 30 * 60 * 1000; // 30 minutos
+const TIMEOUT_APROVACAO_MS = 30 * 60 * 1000;
 
 function getTokens() {
   if (fs.existsSync(TOKENS_PATH)) return JSON.parse(fs.readFileSync(TOKENS_PATH));
@@ -74,7 +74,6 @@ async function getValidToken() {
   return tokens.access_token;
 }
 
-// ─── Envia resposta no ML ─────────────────────────────────────────────────────
 async function enviarResposta(questionId, texto) {
   let token = await getValidToken();
   try {
@@ -95,8 +94,7 @@ async function enviarResposta(questionId, texto) {
   }
 }
 
-// ─── Agenda aprovação automática após 30 minutos ──────────────────────────────
-function agendarAprovacaoAutomatica(questionId, resposta) {
+function agendarAprovacaoAutomatica(questionId) {
   console.log(`Aprovação automática agendada em 30 minutos (pergunta ${questionId}).`);
   setTimeout(async () => {
     const pendentes = getPendentes();
@@ -106,7 +104,6 @@ function agendarAprovacaoAutomatica(questionId, resposta) {
       return;
     }
     try {
-      // Usa a resposta atual (pode ter sido editada)
       await enviarResposta(questionId, pendente.resposta);
       removerPendente(questionId);
       console.log(`Resposta aprovada automaticamente após 30 minutos (pergunta ${questionId}).`);
@@ -116,7 +113,6 @@ function agendarAprovacaoAutomatica(questionId, resposta) {
   }, TIMEOUT_APROVACAO_MS);
 }
 
-// ─── Extrai marca e modelo do anúncio via Claude ──────────────────────────────
 async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio) {
   try {
     const { data } = await axios.post(
@@ -140,7 +136,6 @@ async function extrairDadosDoAnuncio(tituloAnuncio, descricaoAnuncio) {
   }
 }
 
-// ─── Extrai tipo de produto do título via Claude ──────────────────────────────
 async function extrairTipoProduto(tituloAnuncio) {
   try {
     const { data } = await axios.post(
@@ -161,7 +156,33 @@ async function extrairTipoProduto(tituloAnuncio) {
   }
 }
 
-// ─── Busca anúncio equivalente nos anúncios do vendedor ──────────────────────
+// ─── Verifica se o ano do cliente é compatível com o que está na descrição ────
+function verificarAnoNaDescricao(descricaoLower, ano) {
+  // 1. Ano exato
+  if (descricaoLower.includes(ano)) return true;
+  const anoInt = parseInt(ano);
+
+  // 2. "a partir de XXXX"
+  const apartirMatches = descricaoLower.matchAll(/a partir de (\d{4})/g);
+  for (const match of apartirMatches) {
+    if (anoInt >= parseInt(match[1])) return true;
+  }
+
+  // 3. "XXXX+" (ex: "2014+")
+  const maisMatches = descricaoLower.matchAll(/(\d{4})\+/g);
+  for (const match of maisMatches) {
+    if (anoInt >= parseInt(match[1])) return true;
+  }
+
+  // 4. Range "XXXX-XXXX" (ex: "2022-2026")
+  const rangeMatches = descricaoLower.matchAll(/(\d{4})-(\d{4})/g);
+  for (const match of rangeMatches) {
+    if (anoInt >= parseInt(match[1]) && anoInt <= parseInt(match[2])) return true;
+  }
+
+  return false;
+}
+
 async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token) {
   try {
     const tipoProduto = await extrairTipoProduto(tituloAnuncio);
@@ -229,7 +250,7 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         );
         itens = resp.data;
       } catch (e) {
-        console.log(`Erro ao buscar lote ${i}-${i+20}:`, e.message);
+        console.log(`Erro ao buscar lote ${i}-${i + 20}:`, e.message);
         continue;
       }
 
@@ -247,8 +268,8 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         if (!tipoOk) continue;
 
         const anoOk = tituloLower.includes(` ${ano}`) || tituloLower.includes(`${ano} `) ||
-                      tituloLower.endsWith(ano) || tituloLower.includes(`${ano}+`) ||
-                      tituloLower.includes(`${ano}-`);
+          tituloLower.endsWith(ano) || tituloLower.includes(`${ano}+`) ||
+          tituloLower.includes(`${ano}-`);
 
         console.log(`  "${item.title}" | modelo:${modeloOk} tipo:${tipoOk} ano:${anoOk}`);
 
@@ -267,7 +288,6 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
   }
 }
 
-// ─── Função principal de processamento ───────────────────────────────────────
 async function processarPergunta(questionId) {
   let token = await getValidToken();
   let question;
@@ -307,7 +327,16 @@ async function processarPergunta(questionId) {
   }
 
   const perguntaLower = question.text.toLowerCase();
-  const ehCompatibilidade = ['serve', 'compatível', 'compativel', 'funciona', 'encaixa', 'fit', 'pode ser usado', 'pode ser usada', 'usada com', 'usado com', 'cabe', 'vai na', 'vai no', 'aplica', 'aplicar'].some(p => perguntaLower.includes(p));
+  const ehCompatibilidade = [
+    'serve', 'compatível', 'compativel', 'funciona', 'encaixa', 'fit',
+    'pode ser usado', 'pode ser usada', 'usada com', 'usado com',
+    'cabe', 'vai na', 'vai no', 'aplica', 'aplicar'
+  ].some(p => perguntaLower.includes(p));
+
+  // Extrai seção de aplicação da descrição
+  const descricao = item.description || '';
+  const aplicacaoMatch = descricao.match(/aplica[çc][aã]o do produto([\s\S]*?)(?:informa[çc][oõ]es do produto|c[oó]digo|$)/i);
+  const aplicacaoTexto = aplicacaoMatch ? aplicacaoMatch[1].trim() : descricao.slice(0, 800);
 
   let infoEquivalente = '';
   let dadosMotoIncompletos = '';
@@ -345,10 +374,25 @@ async function processarPergunta(questionId) {
       } else if (!ano) {
         dadosMotoIncompletos = 'FALTANDO_ANO';
       } else {
-        const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, token);
-        if (equivalente) {
-          infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.titulo}\nLink: ${equivalente.link}`;
-          console.log('Equivalente encontrado:', equivalente.titulo);
+        // Verifica compatibilidade na descrição do anúncio atual
+        const descricaoLower = descricao.toLowerCase();
+        const modeloNormDesc = modelo.toLowerCase().replace(/[\s\-]/g, '');
+        const descricaoNorm = descricaoLower.replace(/[\s\-]/g, '');
+        const modeloNaDescricao = descricaoNorm.includes(modeloNormDesc);
+        const anoNaDescricao = verificarAnoNaDescricao(descricaoLower, ano);
+
+        console.log(`Verificando compatibilidade na descrição — modelo: ${modeloNaDescricao}, ano: ${anoNaDescricao}`);
+
+        if (modeloNaDescricao && anoNaDescricao) {
+          console.log('Produto atual é compatível segundo a descrição.');
+          infoEquivalente = '\n\nCOMPATÍVEL: O produto deste anúncio é compatível com o modelo e ano informados pelo cliente, conforme a descrição do anúncio.';
+        } else {
+          console.log('Produto não compatível pela descrição — buscando equivalente...');
+          const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, token);
+          if (equivalente) {
+            infoEquivalente = `\n\nProduto equivalente compatível encontrado na loja:\nNome: ${equivalente.titulo}\nLink: ${equivalente.link}`;
+            console.log('Equivalente encontrado:', equivalente.titulo);
+          }
         }
       }
     } catch (err) {
@@ -356,16 +400,11 @@ async function processarPergunta(questionId) {
     }
   }
 
-  // Extrai a seção de aplicação da descrição para destacar no prompt
-  const descricao = item.description || '';
-  const aplicacaoMatch = descricao.match(/aplica[çc][aã]o do produto([\s\S]*?)(?:informa[çc][oõ]es do produto|código|$)/i);
-  const aplicacaoTexto = aplicacaoMatch ? aplicacaoMatch[1].trim() : descricao.slice(0, 800);
-
   const prompt = `Você é um assistente de vendas do Mercado Livre. Responda a pergunta do cliente de forma simpática, clara e objetiva, com base nos dados do produto. Não invente informações que não estão nos dados.
 
 Produto: ${item.title}
 Aplicação do produto (modelos compatíveis — USE ISSO como fonte principal de compatibilidade, NÃO o título):
-${aplicacaoTexto || descricao.slice(0, 800) || 'Não disponível'}
+${aplicacaoTexto || 'Não disponível'}
 Variações disponíveis e estoque:\n${variacoesTexto}
 Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
 Câmbio informado pelo cliente: ${cambio || 'não informado'}
@@ -382,7 +421,7 @@ Diretrizes:
 - Se a informação não estiver nos dados, diga com transparência
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_MODELO: responda APENAS pedindo o modelo específico, ex: "Nos informe o modelo de forma mais específica da sua moto?"
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?"
-- CASO ESPECIAL — existe "COMPATÍVEL": o produto deste anúncio JÁ é compatível com a moto do cliente. Confirme a compatibilidade de forma direta e positiva. Se o cliente perguntou sobre uso conjunto com proteção original, confirme que sim, pode ser usado em conjunto
+- CASO ESPECIAL — existe "COMPATÍVEL" nos dados: o produto deste anúncio JÁ é compatível com a moto do cliente. Confirme a compatibilidade de forma direta e positiva. Se o cliente perguntou sobre uso conjunto com proteção original, confirme que sim baseado na descrição do produto
 - CASO ESPECIAL — existe "Produto equivalente compatível encontrado na loja": informe que esse produto não é compatível mas temos o modelo equivalente disponível e inclua o link do anúncio. NÃO adicione o encaminhamento de atendente nesse caso
 - CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
@@ -400,7 +439,6 @@ Responda em português do Brasil.`;
   const respostaSugerida = aiResponse.content[0].text;
   console.log('Resposta sugerida (aguardando aprovação por 30 min):', respostaSugerida);
 
-  // Salva como pendente e agenda aprovação automática em 30 minutos
   adicionarPendente({
     id: questionId,
     pergunta: question.text,
@@ -410,11 +448,10 @@ Responda em português do Brasil.`;
     expiraEm: new Date(Date.now() + TIMEOUT_APROVACAO_MS).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
   });
 
-  agendarAprovacaoAutomatica(questionId, respostaSugerida);
+  agendarAprovacaoAutomatica(questionId);
   console.log(`Resposta pendente — será enviada automaticamente em 30 minutos se não houver ação (pergunta ${questionId}).`);
 }
 
-// ─── Webhook ──────────────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
   const { topic, resource } = req.body;
@@ -424,7 +461,6 @@ app.post('/webhook', async (req, res) => {
   processarPergunta(questionId).catch(err => console.error('Erro:', err.response?.data || err.message));
 });
 
-// ─── Tela de revisão ──────────────────────────────────────────────────────────
 app.get('/revisar', (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   const pendentes = getPendentes();
@@ -449,9 +485,7 @@ app.get('/revisar', (req, res) => {
           <strong style="font-size:13px">Resposta (editável):</strong><br>
           <textarea name="resposta" style="width:100%;min-height:100px;margin-top:6px;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:sans-serif;box-sizing:border-box">${p.resposta}</textarea>
         </div>
-        <div style="display:flex;gap:10px">
-          <button type="submit" style="flex:1;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Aprovar e Enviar</button>
-        </div>
+        <button type="submit" style="width:100%;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Aprovar e Enviar</button>
       </form>
       <form method="POST" action="/rejeitar?senha=${senha}" style="margin-top:8px">
         <input type="hidden" name="id" value="${p.id}">
@@ -463,7 +497,6 @@ app.get('/revisar', (req, res) => {
   res.send(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revisão de Respostas</title><style>body{font-family:sans-serif;max-width:640px;margin:40px auto;padding:20px;background:#f5f5f5}h1{color:#333;margin-bottom:20px}</style></head><body><h1>Revisão de Respostas (${pendentes.length})</h1>${cards}</body></html>`);
 });
 
-// ─── Editar e aprovar ─────────────────────────────────────────────────────────
 app.post('/editar-e-aprovar', async (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   const { id, resposta } = req.body;
@@ -478,7 +511,6 @@ app.post('/editar-e-aprovar', async (req, res) => {
   }
 });
 
-// ─── Rejeitar ─────────────────────────────────────────────────────────────────
 app.post('/rejeitar', (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   removerPendente(req.body.id);
@@ -486,10 +518,8 @@ app.post('/rejeitar', (req, res) => {
   res.redirect(`/revisar?senha=${req.query.senha}`);
 });
 
-// ─── Rota de saúde ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.send('Servidor ML AutoResponder online!'));
 
-// ─── Setup token ─────────────────────────────────────────────────────────────
 app.post('/setup-token', (req, res) => {
   const { senha, tokens } = req.body;
   if (senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
@@ -497,7 +527,6 @@ app.post('/setup-token', (req, res) => {
   res.send('Token salvo com sucesso!');
 });
 
-// ─── Get token ───────────────────────────────────────────────────────────────
 app.get('/get-token', (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   const tokens = getTokens();
@@ -505,7 +534,6 @@ app.get('/get-token', (req, res) => {
   res.json(tokens);
 });
 
-// ─── Forçar pergunta ─────────────────────────────────────────────────────────
 app.post('/forcar-pergunta', (req, res) => {
   const { senha, question_id } = req.body;
   if (senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
