@@ -307,7 +307,7 @@ async function processarPergunta(questionId) {
   }
 
   const perguntaLower = question.text.toLowerCase();
-  const ehCompatibilidade = ['serve', 'compatível', 'compativel', 'funciona', 'encaixa', 'fit'].some(p => perguntaLower.includes(p));
+  const ehCompatibilidade = ['serve', 'compatível', 'compativel', 'funciona', 'encaixa', 'fit', 'pode ser usado', 'pode ser usada', 'usada com', 'usado com', 'cabe', 'vai na', 'vai no', 'aplica', 'aplicar'].some(p => perguntaLower.includes(p));
 
   let infoEquivalente = '';
   let dadosMotoIncompletos = '';
