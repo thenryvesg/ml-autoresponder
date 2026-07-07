@@ -156,33 +156,81 @@ async function extrairTipoProduto(tituloAnuncio) {
   }
 }
 
+// ─── Normaliza string removendo espaços, hífens e caracteres especiais ────────
+function normalizar(str) {
+  return str.toLowerCase().replace(/[\s\-\.\/]/g, '');
+}
+
 // ─── Verifica se o modelo do cliente está na descrição ───────────────────────
-// Estratégia em duas camadas:
-// 1. Match direto normalizado (remove espaços e hífens de ambos os lados)
-// 2. Busca por palavras individuais significativas do modelo
-//    — resolve casos como "V-Strom 650" vs "V Strom 650 e 1000" onde a
-//      normalização direta falha porque o anúncio cobre múltiplos modelos
+// Usa três estratégias em cascata para lidar com variações de escrita:
+//
+// 1. Match direto normalizado: "V-Strom 650" → "vstrom650" vs descrição normalizada
+//    Resolve a maioria dos casos onde ambos os lados têm o mesmo modelo escrito diferente
+//
+// 2. Match com número separado: busca o número do modelo ("650") como palavra separada
+//    e o prefixo alfanumérico normalizado ("vstrom") juntos na descrição normalizada
+//    Resolve casos como "V Strom 650" vs "vstrom 650 e 1000"
+//
+// 3. Match por partes significativas: quebra o modelo em tokens de 3+ chars,
+//    agrupa tokens curtos adjacentes (ex: "v" + "strom" → "vstrom"),
+//    e verifica se cada parte normalizada aparece na descrição normalizada
 function verificarModeloNaDescricao(descricaoLower, modelo) {
-  const modeloNorm = modelo.toLowerCase().replace(/[\s\-]/g, '');
-  const descricaoNorm = descricaoLower.replace(/[\s\-]/g, '');
+  const modeloNorm = normalizar(modelo);
+  const descricaoNorm = normalizar(descricaoLower);
 
-  // Camada 1: match direto
-  if (descricaoNorm.includes(modeloNorm)) return true;
+  // Estratégia 1: match direto normalizado
+  if (descricaoNorm.includes(modeloNorm)) {
+    console.log(`Modelo encontrado por match direto: "${modeloNorm}"`);
+    return true;
+  }
 
-  // Camada 2: todas as palavras significativas do modelo aparecem na descrição
-  const palavrasModelo = modelo.toLowerCase()
-    .replace(/[-]/g, ' ')
-    .split(' ')
-    .filter(p => p.length > 2 && !/^(e|de|da|do|na|no|em|ou)$/.test(p));
+  // Estratégia 2: separa número do modelo do prefixo e busca ambos
+  // Ex: "vstrom650" → prefixo "vstrom" + número "650"
+  const numeroMatch = modeloNorm.match(/(\d+)/);
+  if (numeroMatch) {
+    const numero = numeroMatch[1];
+    const prefixo = modeloNorm.replace(numero, '').replace(/[^a-z]/g, '');
+    if (prefixo.length >= 2) {
+      const prefixoNaDesc = descricaoNorm.includes(prefixo);
+      const numeroNaDesc = descricaoLower.includes(numero); // número com espaços ao redor
+      if (prefixoNaDesc && numeroNaDesc) {
+        console.log(`Modelo encontrado por prefixo+número: prefixo="${prefixo}" número="${numero}"`);
+        return true;
+      }
+    }
+  }
 
-  if (palavrasModelo.length === 0) return false;
+  // Estratégia 3: tokens agrupados
+  // Divide o modelo em palavras, agrupa as curtas com as adjacentes
+  const tokens = modelo.toLowerCase().replace(/[-]/g, ' ').split(/\s+/).filter(Boolean);
+  const tokensAgrupados = [];
+  let acumulado = '';
+  for (const t of tokens) {
+    if (t.length <= 2) {
+      acumulado += t; // agrupa tokens curtos como "v", "x" com o próximo
+    } else {
+      if (acumulado) {
+        tokensAgrupados.push(normalizar(acumulado + t));
+        acumulado = '';
+      } else {
+        tokensAgrupados.push(normalizar(t));
+      }
+    }
+  }
+  if (acumulado) tokensAgrupados.push(normalizar(acumulado));
 
-  const todasPresentes = palavrasModelo.every(p =>
-    descricaoLower.includes(p) || descricaoNorm.includes(p.replace(/\s/g, ''))
+  // Filtra tokens genéricos
+  const tokensSignificativos = tokensAgrupados.filter(t =>
+    t.length >= 3 && !/^(e|de|da|do|na|no|em|ou|com)$/.test(t)
   );
 
-  console.log(`Busca por palavras individuais [${palavrasModelo.join(', ')}]: ${todasPresentes}`);
-  return todasPresentes;
+  if (tokensSignificativos.length > 0) {
+    const todosPresentes = tokensSignificativos.every(t => descricaoNorm.includes(t));
+    console.log(`Tokens agrupados [${tokensSignificativos.join(', ')}]: ${todosPresentes}`);
+    if (todosPresentes) return true;
+  }
+
+  return false;
 }
 
 // ─── Verifica se o ano do cliente é compatível com o que está na descrição ───
@@ -261,7 +309,7 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
 
     if (todosIds.length === 0) return null;
 
-    const modeloNorm = modelo.toLowerCase().replace(/[\s\-]/g, '');
+    const modeloNorm = normalizar(modelo);
     const palavrasTipo = tipoProduto.split(' ').filter(p => p.length > 3);
 
     for (let i = 0; i < todosIds.length; i += 20) {
@@ -282,7 +330,7 @@ async function buscarEquivalenteNaLoja(tituloAnuncio, marca, modelo, ano, token)
         if (entry.code !== 200) continue;
         const item = entry.body;
         const tituloLower = item.title.toLowerCase();
-        const tituloNorm = tituloLower.replace(/[\s\-]/g, '');
+        const tituloNorm = normalizar(tituloLower);
 
         const modeloOk = tituloNorm.includes(modeloNorm);
         if (!modeloOk) continue;
@@ -398,8 +446,6 @@ async function processarPergunta(questionId) {
         dadosMotoIncompletos = 'FALTANDO_ANO';
       } else {
         const descricaoLower = descricao.toLowerCase();
-
-        // Usa as duas funções dedicadas para verificar modelo e ano
         const modeloNaDescricao = verificarModeloNaDescricao(descricaoLower, modelo);
         const anoNaDescricao = verificarAnoNaDescricao(descricaoLower, ano);
 
