@@ -369,6 +369,21 @@ async function processarPergunta(questionId) {
 
   const { data: item } = await axios.get(`https://api.mercadolibre.com/items/${question.item_id}`, { headers: { Authorization: `Bearer ${token}` } });
 
+  // Busca a descrição separadamente — no ML ela não vem junto com /items/{id}
+  let descricaoCompleta = '';
+  try {
+    const { data: descData } = await axios.get(
+      `https://api.mercadolibre.com/items/${question.item_id}/description`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    descricaoCompleta = descData.plain_text || descData.text || '';
+    console.log(`Descrição obtida: ${descricaoCompleta.slice(0, 100)}...`);
+  } catch (e) {
+    console.log('Não foi possível obter descrição:', e.message);
+  }
+  // Usa a descrição completa, com fallback para o campo description do item
+  item.description = descricaoCompleta || item.description || '';
+
   let variacoesTexto = 'Este produto não possui variações cadastradas.';
   if (item.variations?.length > 0) {
     variacoesTexto = item.variations.map(v => {
