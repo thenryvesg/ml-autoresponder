@@ -156,30 +156,54 @@ async function extrairTipoProduto(tituloAnuncio) {
   }
 }
 
-// ─── Verifica se o ano do cliente é compatível com o que está na descrição ────
+// ─── Verifica se o modelo do cliente está na descrição ───────────────────────
+// Estratégia em duas camadas:
+// 1. Match direto normalizado (remove espaços e hífens de ambos os lados)
+// 2. Busca por palavras individuais significativas do modelo
+//    — resolve casos como "V-Strom 650" vs "V Strom 650 e 1000" onde a
+//      normalização direta falha porque o anúncio cobre múltiplos modelos
+function verificarModeloNaDescricao(descricaoLower, modelo) {
+  const modeloNorm = modelo.toLowerCase().replace(/[\s\-]/g, '');
+  const descricaoNorm = descricaoLower.replace(/[\s\-]/g, '');
+
+  // Camada 1: match direto
+  if (descricaoNorm.includes(modeloNorm)) return true;
+
+  // Camada 2: todas as palavras significativas do modelo aparecem na descrição
+  const palavrasModelo = modelo.toLowerCase()
+    .replace(/[-]/g, ' ')
+    .split(' ')
+    .filter(p => p.length > 2 && !/^(e|de|da|do|na|no|em|ou)$/.test(p));
+
+  if (palavrasModelo.length === 0) return false;
+
+  const todasPresentes = palavrasModelo.every(p =>
+    descricaoLower.includes(p) || descricaoNorm.includes(p.replace(/\s/g, ''))
+  );
+
+  console.log(`Busca por palavras individuais [${palavrasModelo.join(', ')}]: ${todasPresentes}`);
+  return todasPresentes;
+}
+
+// ─── Verifica se o ano do cliente é compatível com o que está na descrição ───
+// Suporta quatro formatos comuns nos anúncios:
+// 1. Ano exato: "2018"
+// 2. "a partir de 2014" — qualquer ano >= 2014
+// 3. "2014+" — mesmo comportamento
+// 4. Range "2014-2020" — qualquer ano dentro do intervalo
 function verificarAnoNaDescricao(descricaoLower, ano) {
-  // 1. Ano exato
   if (descricaoLower.includes(ano)) return true;
   const anoInt = parseInt(ano);
 
-  // 2. "a partir de XXXX"
-  const apartirMatches = descricaoLower.matchAll(/a partir de (\d{4})/g);
-  for (const match of apartirMatches) {
+  for (const match of descricaoLower.matchAll(/a partir de (\d{4})/g)) {
     if (anoInt >= parseInt(match[1])) return true;
   }
-
-  // 3. "XXXX+" (ex: "2014+")
-  const maisMatches = descricaoLower.matchAll(/(\d{4})\+/g);
-  for (const match of maisMatches) {
+  for (const match of descricaoLower.matchAll(/(\d{4})\+/g)) {
     if (anoInt >= parseInt(match[1])) return true;
   }
-
-  // 4. Range "XXXX-XXXX" (ex: "2022-2026")
-  const rangeMatches = descricaoLower.matchAll(/(\d{4})-(\d{4})/g);
-  for (const match of rangeMatches) {
+  for (const match of descricaoLower.matchAll(/(\d{4})-(\d{4})/g)) {
     if (anoInt >= parseInt(match[1]) && anoInt <= parseInt(match[2])) return true;
   }
-
   return false;
 }
 
@@ -333,7 +357,6 @@ async function processarPergunta(questionId) {
     'cabe', 'vai na', 'vai no', 'aplica', 'aplicar'
   ].some(p => perguntaLower.includes(p));
 
-  // Extrai seção de aplicação da descrição
   const descricao = item.description || '';
   const aplicacaoMatch = descricao.match(/aplica[çc][aã]o do produto([\s\S]*?)(?:informa[çc][oõ]es do produto|c[oó]digo|$)/i);
   const aplicacaoTexto = aplicacaoMatch ? aplicacaoMatch[1].trim() : descricao.slice(0, 800);
@@ -374,11 +397,10 @@ async function processarPergunta(questionId) {
       } else if (!ano) {
         dadosMotoIncompletos = 'FALTANDO_ANO';
       } else {
-        // Verifica compatibilidade na descrição do anúncio atual
         const descricaoLower = descricao.toLowerCase();
-        const modeloNormDesc = modelo.toLowerCase().replace(/[\s\-]/g, '');
-        const descricaoNorm = descricaoLower.replace(/[\s\-]/g, '');
-        const modeloNaDescricao = descricaoNorm.includes(modeloNormDesc);
+
+        // Usa as duas funções dedicadas para verificar modelo e ano
+        const modeloNaDescricao = verificarModeloNaDescricao(descricaoLower, modelo);
         const anoNaDescricao = verificarAnoNaDescricao(descricaoLower, ano);
 
         console.log(`Verificando compatibilidade na descrição — modelo: ${modeloNaDescricao}, ano: ${anoNaDescricao}`);
@@ -406,7 +428,7 @@ Produto: ${item.title}
 Aplicação do produto (modelos compatíveis — USE ISSO como fonte principal de compatibilidade, NÃO o título):
 ${aplicacaoTexto || 'Não disponível'}
 Variações disponíveis e estoque:\n${variacoesTexto}
-Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há especialistas disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
+Contexto do atendimento: ${ehHorarioComercial ? 'HORÁRIO COMERCIAL (segunda a sexta, 09h às 18h) — há atendentes disponíveis agora' : 'FORA DO HORÁRIO COMERCIAL'}
 Câmbio informado pelo cliente: ${cambio || 'não informado'}
 Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
 ${infoEquivalente}
