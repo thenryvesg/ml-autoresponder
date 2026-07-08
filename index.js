@@ -369,6 +369,29 @@ async function processarPergunta(questionId) {
 
   const { data: item } = await axios.get(`https://api.mercadolibre.com/items/${question.item_id}`, { headers: { Authorization: `Bearer ${token}` } });
 
+  // Busca respostas anteriores do anúncio para usar como exemplos de tom/estilo
+  let exemplosRespostas = '';
+  try {
+    const { data: perguntasAnteriores } = await axios.get(
+      `https://api.mercadolibre.com/questions/search?item_id=${question.item_id}&status=ANSWERED&limit=10`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const exemplos = (perguntasAnteriores.questions || [])
+      .filter(q => q.answer && q.id !== parseInt(questionId))
+      .slice(0, 5)
+      .map(q => `Pergunta: ${q.text}
+Resposta: ${q.answer.text}`)
+      .join('
+
+');
+    if (exemplos) {
+      exemplosRespostas = exemplos;
+      console.log(`${(perguntasAnteriores.questions || []).filter(q => q.answer).length} respostas anteriores encontradas para usar como exemplo.`);
+    }
+  } catch (e) {
+    console.log('Não foi possível obter respostas anteriores:', e.message);
+  }
+
   // Busca a descrição separadamente — no ML ela não vem junto com /items/{id}
   let descricaoCompleta = '';
   try {
@@ -474,7 +497,11 @@ Câmbio informado pelo cliente: ${cambio || 'não informado'}
 Dados da moto incompletos: ${dadosMotoIncompletos || 'NENHUM — dados completos'}
 ${infoEquivalente}
 
-Pergunta do cliente: ${question.text}
+${exemplosRespostas ? `Exemplos de como o vendedor respondeu perguntas anteriores neste anúncio (use como referência de tom, estilo e nível de detalhe — NÃO copie as respostas, apenas aprenda o padrão):
+
+${exemplosRespostas}
+
+` : ''}Pergunta do cliente: ${question.text}
 
 Diretrizes:
 - Responda como um vendedor de loja física: direto, natural, sem enrolação
