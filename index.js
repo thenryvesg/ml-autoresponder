@@ -424,8 +424,14 @@ Resposta: ${q.answer.text}`)
   ].some(p => perguntaLower.includes(p));
 
   const descricao = item.description || '';
-  const aplicacaoMatch = descricao.match(/aplica[çc][aã]o do produto([\s\S]*?)(?:informa[çc][oõ]es do produto|c[oó]digo|$)/i);
-  const aplicacaoTexto = aplicacaoMatch ? aplicacaoMatch[1].trim() : descricao.slice(0, 800);
+
+  // Extrai apenas a seção de compatibilidade da descrição
+  // Aceita cabeçalhos: "Aplicação do produto", "Compatibilidade", "Modelos compatíveis" e variações
+  const secaoMatch = descricao.match(
+    /(?:aplica[çc][aã]o do produto|compatibilidade|modelos compat[ií]veis)([\s\S]*?)(?:informa[çc][oõ]es do produto|c[oó]digo|garantia|descri[çc][aã]o|acompanha|fabricado|$)/i
+  );
+  const aplicacaoTexto = secaoMatch ? secaoMatch[1].trim() : descricao.slice(0, 1000);
+  console.log(`Seção de compatibilidade extraída (${aplicacaoTexto.length} chars): ${aplicacaoTexto.slice(0, 150)}...`);
 
   let infoEquivalente = '';
   let dadosMotoIncompletos = '';
