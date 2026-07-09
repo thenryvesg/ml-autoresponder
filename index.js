@@ -497,6 +497,7 @@ ${exemplosRespostas ? `\nExemplos de como o vendedor respondeu perguntas anterio
 Pergunta do cliente: ${question.text}
 
 Diretrizes:
+- CRÍTICO: Escreva SOMENTE a mensagem final que será enviada ao cliente. NUNCA narre, resuma ou comente a pergunta em terceira pessoa (proibido: "o cliente menciona", "o cliente perguntou", "o cliente não informou", "com base na pergunta", etc). Você está falando DIRETAMENTE com o cliente, não descrevendo a situação para outra pessoa.
 - Responda como um vendedor de loja física: direto, natural, sem enrolação
 - Vá direto à informação pedida na primeira frase
 - Se o cliente perguntar sobre cor/variação, confirme se existe E se tem estoque
