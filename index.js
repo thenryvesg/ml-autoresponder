@@ -406,13 +406,6 @@ async function processarPergunta(questionId) {
     }).join('\n');
   }
 
-  const perguntaLower = question.text.toLowerCase();
-  const ehCompatibilidade = [
-    'serve', 'compativel', 'compatível', 'funciona', 'encaixa', 'fit',
-    'pode ser usado', 'pode ser usada', 'usada com', 'usado com',
-    'cabe', 'vai na', 'vai no', 'aplica', 'aplicar'
-  ].some(p => perguntaLower.includes(p));
-
   // Extrai seção de compatibilidade da descrição
   const descricao = item.description || '';
   const secaoRegex = /(?:aplica(?:cao|ção) do produto|compatibilidade|modelos compat(?:i|í)veis)([\s\S]*?)(?:informa(?:co|ção)es do produto|c(?:o|ó)digo|garantia|descri(?:ca|ção)o|acompanha|fabricado|$)/i;
@@ -424,22 +417,28 @@ async function processarPergunta(questionId) {
   let dadosMotoIncompletos = '';
   let cambio = '';
 
-  if (ehCompatibilidade) {
-    const { data: extraido } = await axios.post(
-      'https://api.anthropic.com/v1/messages',
-      {
-        model: 'claude-sonnet-4-6',
-        max_tokens: 100,
-        messages: [{ role: 'user', content: `Extraia marca, modelo, ano e cambio da moto da seguinte pergunta. Responda APENAS em JSON no formato {"marca":"","modelo":"","ano":"","cambio":""} sem mais nada. Para cambio use "manual", "automatico" ou deixe vazio se nao mencionado.\n\nPergunta: "${question.text}"` }]
-      },
-      { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
-    );
+  const { data: extraido } = await axios.post(
+    'https://api.anthropic.com/v1/messages',
+    {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 120,
+      messages: [{
+        role: 'user',
+        content: `Analise a pergunta de um cliente sobre um anuncio de peca/acessorio de motocicleta no Mercado Livre. Determine se ela esta relacionada a saber se o produto e compativel/serve/se encaixa em um modelo especifico de moto — mesmo que nao use a palavra "compativel" (ex: "voce tem para minha X", "tem pra Honda Y", "da pra usar na Z" TAMBEM contam como pergunta de compatibilidade). Se for, extraia marca, modelo, ano e cambio da moto mencionados. Responda APENAS em JSON no formato {"eh_compatibilidade":true|false,"marca":"","modelo":"","ano":"","cambio":""} sem mais nada. Para cambio use "manual", "automatico" ou deixe vazio se nao mencionado.\n\nPergunta: "${question.text}"`
+      }]
+    },
+    { headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+  );
 
-    try {
-      const textoExtraido = extraido.content[0].text.trim().replace(/```json|```/g, '').trim();
-      console.log('Texto extraido da pergunta:', textoExtraido);
-      let { marca, modelo, ano, cambio: cambioExtraido } = JSON.parse(textoExtraido);
-      cambio = cambioExtraido || '';
+  try {
+    const textoExtraido = extraido.content[0].text.trim().replace(/```json|```/g, '').trim();
+    console.log('Texto extraido da pergunta:', textoExtraido);
+    let { eh_compatibilidade, marca, modelo, ano, cambio: cambioExtraido } = JSON.parse(textoExtraido);
+    cambio = cambioExtraido || '';
+
+    if (!eh_compatibilidade) {
+      console.log('Pergunta nao e sobre compatibilidade de moto — pulando extracao detalhada.');
+    } else {
       console.log(`Dados extraidos — marca: "${marca}", modelo: "${modelo}", ano: "${ano}", cambio: "${cambio}"`);
 
       if ((!modelo || !marca) && ano) {
@@ -478,9 +477,9 @@ async function processarPergunta(questionId) {
           }
         }
       }
-    } catch (err) {
-      console.log('Erro ao processar dados da moto:', err.message);
     }
+  } catch (err) {
+    console.log('Erro ao processar dados da moto:', err.message);
   }
 
   const prompt = `Você é um assistente de vendas do Mercado Livre. Responda a pergunta do cliente de forma simpática, clara e objetiva, com base nos dados do produto. Não invente informações que não estão nos dados.
