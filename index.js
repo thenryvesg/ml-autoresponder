@@ -452,28 +452,50 @@ async function processarPergunta(questionId) {
 
       if (!modelo) {
         dadosMotoIncompletos = 'FALTANDO_MODELO';
-      } else if (!ano) {
-        dadosMotoIncompletos = 'FALTANDO_ANO';
       } else {
         const descricaoLower = descricao.toLowerCase();
         // Busca na seção de compatibilidade extraída, com fallback para descrição completa
         const textoParaBusca = aplicacaoTexto || descricao;
         const textoParaBuscaLower = textoParaBusca.toLowerCase();
+        const temDescricaoParaComparar = textoParaBusca && textoParaBusca.trim().length > 0;
 
         const modeloNaDescricao = verificarModeloNaDescricao(textoParaBuscaLower, modelo);
-        const anoNaDescricao = verificarAnoNaDescricao(textoParaBuscaLower, ano);
 
-        console.log(`Compatibilidade na descricao — modelo: ${modeloNaDescricao}, ano: ${anoNaDescricao}`);
-
-        if (modeloNaDescricao && anoNaDescricao) {
-          console.log('Produto atual e compativel segundo a descricao.');
-          infoEquivalente = '\n\nCOMPATIVEL: O produto deste anuncio e compativel com o modelo e ano informados pelo cliente, conforme a descricao do anuncio.';
-        } else {
+        if (!modeloNaDescricao && temDescricaoParaComparar) {
+          // Modelo ja nao bate na descricao — incompatibilidade nao depende do ano, nao precisa perguntar
+          console.log('Modelo nao encontrado na descricao — incompatibilidade independe do ano.');
           console.log('Produto nao compativel — buscando equivalente...');
           const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, token);
           if (equivalente) {
             infoEquivalente = `\n\nProduto equivalente compativel encontrado na loja:\nNome: ${equivalente.titulo}\nLink: ${equivalente.link}`;
             console.log('Equivalente encontrado:', equivalente.titulo);
+          } else {
+            infoEquivalente = '\n\nINCOMPATIVEL_CONFIRMADO: A descricao do anuncio foi verificada e confirma que este produto NAO e compativel com o modelo informado pelo cliente. Nao ha produto equivalente disponivel na loja.';
+            console.log('Incompatibilidade confirmada pela descricao — sem equivalente na loja.');
+          }
+        } else if (!ano) {
+          // Modelo bate (ou nao ha descricao pra comparar) mas falta o ano para confirmar
+          dadosMotoIncompletos = 'FALTANDO_ANO';
+        } else {
+          const anoNaDescricao = verificarAnoNaDescricao(textoParaBuscaLower, ano);
+
+          console.log(`Compatibilidade na descricao — modelo: ${modeloNaDescricao}, ano: ${anoNaDescricao}`);
+
+          if (modeloNaDescricao && anoNaDescricao) {
+            console.log('Produto atual e compativel segundo a descricao.');
+            infoEquivalente = '\n\nCOMPATIVEL: O produto deste anuncio e compativel com o modelo e ano informados pelo cliente, conforme a descricao do anuncio.';
+          } else {
+            console.log('Produto nao compativel — buscando equivalente...');
+            const equivalente = await buscarEquivalenteNaLoja(item.title, marca || '', modelo, ano, token);
+            if (equivalente) {
+              infoEquivalente = `\n\nProduto equivalente compativel encontrado na loja:\nNome: ${equivalente.titulo}\nLink: ${equivalente.link}`;
+              console.log('Equivalente encontrado:', equivalente.titulo);
+            } else if (temDescricaoParaComparar) {
+              // Temos descricao suficiente para ter certeza da incompatibilidade — nao precisa encaminhar pra atendente
+              infoEquivalente = '\n\nINCOMPATIVEL_CONFIRMADO: A descricao do anuncio foi verificada e confirma que este produto NAO e compativel com o modelo/ano informado pelo cliente. Nao ha produto equivalente disponivel na loja.';
+              console.log('Incompatibilidade confirmada pela descricao — sem equivalente na loja.');
+            }
+            // Se nao ha descricao para comparar, infoEquivalente fica vazio — resposta final trata como incerto e encaminha para atendente
           }
         }
       }
@@ -506,7 +528,8 @@ Diretrizes:
 - CASO ESPECIAL — dadosMotoIncompletos = FALTANDO_ANO: responda APENAS pedindo o ano, ex: "Nos informe o ano de fabricação da sua moto para confirmarmos a compatibilidade?"
 - CASO ESPECIAL — existe "COMPATIVEL" nos dados: o produto deste anúncio JÁ é compatível. Confirme de forma direta e positiva. NÃO adicione encaminhamento para atendente
 - CASO ESPECIAL — existe "Produto equivalente compativel encontrado na loja": informe que esse produto não é compatível mas temos o equivalente disponível e inclua o link. NÃO adicione encaminhamento para atendente
-- CASO ESPECIAL — incompatível e SEM equivalente: informe a incompatibilidade de forma direta e aplique a REGRA DE ENCAMINHAMENTO
+- CASO ESPECIAL — existe "INCOMPATIVEL_CONFIRMADO" nos dados: já temos certeza da incompatibilidade (verificada na descrição do anúncio). Informe a incompatibilidade de forma direta e clara. NÃO aplique a REGRA DE ENCAMINHAMENTO — apenas agradeça o contato ao final, mesmo em horário comercial, pois a resposta já está completa e não depende de um atendente
+- CASO ESPECIAL — incompatível, SEM equivalente e SEM "INCOMPATIVEL_CONFIRMADO" (ou seja, não há descrição suficiente para ter certeza): informe que não é possível confirmar com os dados disponíveis e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
 - REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um atendente da loja poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
 - Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
