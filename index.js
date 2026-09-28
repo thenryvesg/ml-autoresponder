@@ -385,15 +385,25 @@ async function processarPergunta(questionId) {
 
   // Busca descrição separadamente
   let descricaoCompleta = '';
-  try {
-    const { data: descData } = await axios.get(
-      `https://api.mercadolibre.com/items/${question.item_id}/description`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    descricaoCompleta = descData.plain_text || descData.text || '';
-    console.log(`Descricao obtida: ${descricaoCompleta.slice(0, 100)}...`);
-  } catch (e) {
-    console.log('Nao foi possivel obter descricao:', e.message);
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    try {
+      const { data: descData } = await axios.get(
+        `https://api.mercadolibre.com/items/${question.item_id}/description`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      descricaoCompleta = descData.plain_text || descData.text || '';
+      console.log(`Descricao obtida: ${descricaoCompleta.slice(0, 100)}...`);
+      break;
+    } catch (e) {
+      // Guarda o corpo da resposta de erro do ML (costuma explicar o motivo do 404) e dados do anuncio para achar o padrao
+      const corpoErro = JSON.stringify(e.response?.data || {}).slice(0, 300);
+      console.log(`Descricao do item ${question.item_id} falhou (tentativa ${tentativa}/2) — status ${e.response?.status || e.message}: ${corpoErro}`);
+      if (tentativa === 2) {
+        console.log(`Dados do item sem descricao — titulo: "${(item.title || '').slice(0, 80)}", status: ${item.status}, catalog_listing: ${item.catalog_listing}, user_product_id: ${item.user_product_id || 'nenhum'}, listing_type: ${item.listing_type_id}, ultima atualizacao: ${item.last_updated}`);
+      } else {
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
   }
   item.description = descricaoCompleta || item.description || '';
 
@@ -529,7 +539,7 @@ Diretrizes:
 - CASO ESPECIAL — existe "COMPATIVEL" nos dados: o produto deste anúncio JÁ é compatível. Confirme de forma direta e positiva. NÃO adicione encaminhamento para atendente
 - CASO ESPECIAL — existe "Produto equivalente compativel encontrado na loja": informe que esse produto não é compatível mas temos o equivalente disponível e inclua o link. NÃO adicione encaminhamento para atendente
 - CASO ESPECIAL — existe "INCOMPATIVEL_CONFIRMADO" nos dados: já temos certeza da incompatibilidade (verificada na descrição do anúncio). Informe a incompatibilidade de forma direta e clara. NÃO aplique a REGRA DE ENCAMINHAMENTO — apenas agradeça o contato ao final, mesmo em horário comercial, pois a resposta já está completa e não depende de um atendente
-- CASO ESPECIAL — incompatível, SEM equivalente e SEM "INCOMPATIVEL_CONFIRMADO" (ou seja, não há descrição suficiente para ter certeza): informe que não é possível confirmar com os dados disponíveis e aplique a REGRA DE ENCAMINHAMENTO
+- CASO ESPECIAL — incompatível, SEM equivalente e SEM "INCOMPATIVEL_CONFIRMADO" (ou seja, não há descrição suficiente para ter certeza): diga de forma natural que no momento não conseguimos confirmar a compatibilidade com a moto informada (NUNCA use expressões como "dados do produto", "informações cadastradas" ou "dados disponíveis", pois o cliente não sabe como o sistema funciona) e aplique a REGRA DE ENCAMINHAMENTO
 - NUNCA sugira contato com fabricante, site externo ou qualquer canal fora do Mercado Livre
 - REGRA DE ENCAMINHAMENTO: HORÁRIO COMERCIAL → "Por gentileza, entre em contato em breve que um atendente da loja poderá te ajudar melhor."; FORA DO COMERCIAL → "Por gentileza, entre em contato conosco em horário comercial, de segunda a sexta-feira, para um melhor auxílio."
 - Máximo 3 frases. Sem saudações, sem markdown, sem emojis.
