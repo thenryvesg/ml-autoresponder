@@ -562,6 +562,7 @@ Responda em português do Brasil.`;
     resposta: respostaSugerida,
     criadoEm: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
     expiraEm: new Date(Date.now() + TIMEOUT_APROVACAO_MS).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+    expiraEmISO: new Date(Date.now() + TIMEOUT_APROVACAO_MS).toISOString(), // usado pelo Painel de Scripts
   });
 
   agendarAprovacaoAutomatica(questionId);
@@ -577,6 +578,11 @@ app.post('/webhook', async (req, res) => {
   processarPergunta(questionId).catch(err => console.error('Erro:', err.response?.data || err.message));
 });
 
+// Escapa texto antes de colocar na página (pergunta e produto vêm de fora)
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 app.get('/revisar', (req, res) => {
   if (req.query.senha !== process.env.SETUP_PASSWORD) return res.status(401).send('Senha incorreta.');
   const pendentes = getPendentes();
@@ -588,23 +594,23 @@ app.get('/revisar', (req, res) => {
 
   const cards = pendentes.map(p => `
     <div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:20px;box-shadow:0 1px 4px rgba(0,0,0,0.1)">
-      <div style="font-size:12px;color:#999;margin-bottom:4px">${p.criadoEm} — Pergunta #${p.id}</div>
-      <div style="font-size:12px;color:#f59e0b;margin-bottom:8px">Aprovação automática em: ${p.expiraEm}</div>
-      <div style="font-size:13px;color:#555;margin-bottom:6px"><strong>Produto:</strong> ${p.produto}</div>
+      <div style="font-size:12px;color:#999;margin-bottom:4px">${esc(p.criadoEm)} — Pergunta #${esc(p.id)}</div>
+      <div style="font-size:12px;color:#f59e0b;margin-bottom:8px">Aprovação automática em: ${esc(p.expiraEm)}</div>
+      <div style="font-size:13px;color:#555;margin-bottom:6px"><strong>Produto:</strong> ${esc(p.produto)}</div>
       <div style="background:#f0f4ff;padding:12px;border-radius:6px;margin-bottom:10px">
         <strong style="font-size:13px">Pergunta do cliente:</strong><br>
-        <span style="font-size:15px">${p.pergunta}</span>
+        <span style="font-size:15px">${esc(p.pergunta)}</span>
       </div>
-      <form method="POST" action="/editar-e-aprovar?senha=${senha}">
-        <input type="hidden" name="id" value="${p.id}">
+      <form method="POST" action="/editar-e-aprovar?senha=${encodeURIComponent(senha)}">
+        <input type="hidden" name="id" value="${esc(p.id)}">
         <div style="margin-bottom:10px">
           <strong style="font-size:13px">Resposta (editável):</strong><br>
-          <textarea name="resposta" style="width:100%;min-height:100px;margin-top:6px;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:sans-serif;box-sizing:border-box">${p.resposta}</textarea>
+          <textarea name="resposta" style="width:100%;min-height:100px;margin-top:6px;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:sans-serif;box-sizing:border-box">${esc(p.resposta)}</textarea>
         </div>
         <button type="submit" style="width:100%;padding:12px;background:#22c55e;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Aprovar e Enviar</button>
       </form>
-      <form method="POST" action="/rejeitar?senha=${senha}" style="margin-top:8px">
-        <input type="hidden" name="id" value="${p.id}">
+      <form method="POST" action="/rejeitar?senha=${encodeURIComponent(senha)}" style="margin-top:8px">
+        <input type="hidden" name="id" value="${esc(p.id)}">
         <button type="submit" style="width:100%;padding:12px;background:#ef4444;color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer">Rejeitar (não enviar)</button>
       </form>
     </div>
@@ -632,6 +638,51 @@ app.post('/rejeitar', (req, res) => {
   removerPendente(req.body.id);
   console.log(`Resposta rejeitada (pergunta ${req.body.id}).`);
   res.redirect(`/revisar?senha=${req.query.senha}`);
+});
+
+// ── API para o Painel de Scripts ─────────────────────────────────────────────
+// A senha vai no cabeçalho "x-senha" (não no endereço), para não ficar gravada
+// no histórico do navegador nem nos logs de requisições do Render.
+function autorizadoPainel(req, res) {
+  if (!process.env.SETUP_PASSWORD || req.get('x-senha') !== process.env.SETUP_PASSWORD) {
+    res.status(401).json({ erro: 'Senha incorreta.' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/pendentes', (req, res) => {
+  if (!autorizadoPainel(req, res)) return;
+  res.json({ agora: new Date().toISOString(), pendentes: getPendentes() });
+});
+
+app.post('/api/pendentes/:id/aprovar', async (req, res) => {
+  if (!autorizadoPainel(req, res)) return;
+  const id = String(req.params.id);
+  const pendente = getPendentes().find(p => String(p.id) === id);
+  if (!pendente) return res.status(404).json({ erro: 'Esta pergunta não está mais pendente (já foi enviada, rejeitada ou aprovada automaticamente).' });
+  const resposta = String(req.body?.resposta ?? pendente.resposta).trim();
+  if (!resposta) return res.status(400).json({ erro: 'A resposta está vazia.' });
+  try {
+    await enviarResposta(pendente.id, resposta);
+    removerPendente(pendente.id);
+    console.log(`Resposta aprovada e enviada pelo painel (pergunta ${id}).`);
+    res.json({ ok: true });
+  } catch (err) {
+    const detalhe = err.response?.data?.message || err.response?.data?.error || err.message;
+    console.error(`Erro ao enviar resposta pelo painel (pergunta ${id}):`, err.response?.data || err.message);
+    res.status(502).json({ erro: `O Mercado Livre recusou o envio: ${detalhe}` });
+  }
+});
+
+app.post('/api/pendentes/:id/rejeitar', (req, res) => {
+  if (!autorizadoPainel(req, res)) return;
+  const id = String(req.params.id);
+  const antes = getPendentes();
+  if (!antes.some(p => String(p.id) === id)) return res.status(404).json({ erro: 'Esta pergunta não está mais pendente.' });
+  savePendentes(antes.filter(p => String(p.id) !== id));
+  console.log(`Resposta rejeitada pelo painel (pergunta ${id}).`);
+  res.json({ ok: true });
 });
 
 app.get('/', (req, res) => res.send('Servidor ML AutoResponder online!'));
